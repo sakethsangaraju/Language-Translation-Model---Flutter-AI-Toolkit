@@ -1,0 +1,25 @@
+# Flutter build files
+build/
+.dart_tool/
+.packages
+pubspec.lock
+
+# Android and iOS platforms
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+
+# IDE and system files
+.vscode/
+.idea/
+*.iml
+
+# Configuration files
+.env
+
+# Build artifacts
+*.apk
+*.app
