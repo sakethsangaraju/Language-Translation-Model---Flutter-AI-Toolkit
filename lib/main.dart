@@ -214,7 +214,7 @@ class _CommunicationScreenState extends State<CommunicationScreen>
                   ),
                 ),
                 Padding(
-                  // =============================================== Image Upload Tab ===============================================
+                  // ================================================ Image Upload Tab ===============================================
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
