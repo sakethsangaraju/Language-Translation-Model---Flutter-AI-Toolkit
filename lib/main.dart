@@ -100,11 +100,11 @@ class _CommunicationScreenState extends State<CommunicationScreen>
   }
 
   Future<void> sendImage() async {
-    // Pick an image and send it to the /upload endpoint.
     final picker = ImagePicker();
     final XFile? pickedFile =
         await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile == null) return;
+
     setState(() {
       isLoading = true;
       responseText = null;
@@ -112,16 +112,29 @@ class _CommunicationScreenState extends State<CommunicationScreen>
     });
 
     try {
+      // Read the file as bytes
+      final bytes = await pickedFile.readAsBytes();
+
+      // Create the multipart request using fromBytes instead of fromPath
       var request =
           http.MultipartRequest('POST', Uri.parse('$serverAddress/upload'));
-      request.files
-          .add(await http.MultipartFile.fromPath('file', pickedFile.path));
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'file',
+          bytes,
+          filename:
+              pickedFile.name, // You can also specify contentType if needed
+        ),
+      );
+
+      // Send the request and get response
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
-          imageUrl = data['url']; // Expects { "url": "image URL" }
+          imageUrl =
+              data['url']; // Assuming the server returns the URL under 'url'
         });
       } else {
         setState(() {
@@ -133,6 +146,7 @@ class _CommunicationScreenState extends State<CommunicationScreen>
         responseText = 'Error: $e';
       });
     }
+
     setState(() {
       isLoading = false;
     });
