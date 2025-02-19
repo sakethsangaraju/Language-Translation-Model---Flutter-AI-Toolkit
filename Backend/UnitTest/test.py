@@ -1,17 +1,18 @@
 import unittest
 import time
-from mock_gemini import MockGemini
+from api import Gemini
 
 class TestMockGemini(unittest.TestCase):
     def setUp(self):
-        self.mock = MockGemini()
+        self.mock = Gemini("not_a_real_key")
 
     def test_connection(self):
         self.assertTrue(self.mock.test_connection())
 
     def test_disconnection(self):
         self.mock.disconnect()
-        self.assertRaises(self.mock.conversation("Test"))
+        with self.assertRaises(ConnectionError):
+            self.mock.conversation("Test")
 
     def response(self):
         self.assertEqual(self.mock.conversation("Test"), "Message received: Test")
@@ -20,4 +21,4 @@ class TestMockGemini(unittest.TestCase):
         self.assertRaises(self.mock.latency_simulation(True))
 
 if __name__ == "__main__":
-    api.py()
+    unittest.main()
