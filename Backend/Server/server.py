@@ -1,27 +1,11 @@
-import asyncio
-import websockets
-
-async def hello(websocket):
-    msg = await websocket.recv()
-    echo = f"Message sent: {msg}"
-    print(echo)
-
-    await websocket.send(echo)
-
-async def main():
-    async with websockets.serve(hello, "localhost", 8765):
-        #run forever
-        await asyncio.Future()
-
-if __name__ == "__main__":
-    asyncio.run(main())
 import eventlet
 eventlet.monkey_patch()  # Must be at the very top!
-
-import base64  # For audio encoding/decoding
+from dotenv import load_dotenv
+load_dotenv
+import base64
 import os
-import time
 import random
+import time 
 import logging
 import re
 import json
@@ -29,7 +13,7 @@ import json
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
-
+from werkzeug.utils import secure_filename  # New: for safe filenames
 
 import google.generativeai as genai
 
@@ -40,15 +24,18 @@ logging.getLogger('socketio').setLevel(logging.WARNING)
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 app = Flask(__name__)
-CORS(app, resources={r"/uploads/*": {"origins": "*"}})
-socketio = SocketIO(app, cors_allowed_origins="*", logger=False, engineio_logger=False)
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", logger=False, engineio_logger=False, async_mode='eventlet')
 
 # Server configuration
 PORT = 8008
-UPLOAD_FOLDER = os.path.abspath('uploads')  # Use an absolute path
+# Use an absolute path for UPLOAD_FOLDER
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+
 # API key in environment variable
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
@@ -59,7 +46,6 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 @app.route('/echo', methods=['POST'])
 def echo():
-    # Receive JSON with a 'text' key, log it, and return an echo message.
     data = request.get_json()
     if not data or 'text' not in data:
         return jsonify({'error': 'No text provided'}), 400
@@ -72,19 +58,22 @@ def echo():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    # Handle image upload; save with a timestamped filename and return the URL.
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
 
-    _, ext = os.path.splitext(file.filename)
-    filename = f"{int(time.time() * 1000)}{ext}"
+    # Secure the filename and append a timestamp for uniqueness
+    original_filename = secure_filename(file.filename)
+    name, ext = os.path.splitext(original_filename)
+    timestamp = int(random.random() * 1000 + time.time() * 1000)
+    filename = f"{name}_{timestamp}{ext}"
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
     logging.info("Image uploaded: %s", filename)
-    image_url = f"http://127.0.0.1{PORT}/uploads/{filename}"
+    # Use request.host_url for a dynamic URL (e.g., if running on a device)
+    image_url = f"{request.host_url}uploads/{filename}"
     return jsonify({
         'url': image_url,
         'message': f'File "{filename}" uploaded successfully!'
@@ -92,12 +81,10 @@ def upload_file():
 
 @app.route('/uploads/<path:filename>')
 def serve_uploads(filename):
-    # Serve uploaded files.
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route('/test_translation', methods=['POST'])
 def test_translation():
-    # Test endpoint for Gemini translation (without WebSockets).
     data = request.get_json()
     if not data or 'text' not in data:
         return jsonify({'error': 'No text provided'}), 400
@@ -116,7 +103,6 @@ def test_translation():
 # ----------------- Gemini Translation -----------------
 
 class Gemini:
-    # Handles translation via the Gemini API.
     def __init__(self, model='gemini-2.0-flash'):
         self.model = model
         self.connection = True
@@ -128,7 +114,6 @@ class Gemini:
         self.connection = False
 
     def conversation(self, message):
-        # Translate English text to Spanish using a structured JSON prompt.
         if not self.connection:
             raise ConnectionError("Server disconnected")
         if not message:
@@ -177,19 +162,23 @@ Now, translate this text:
             return "Translation error."
 
     def latency_simulation(self, a=False):
-        # Simulate latency for demonstration purposes.
+        # Use eventlet.sleep for non-blocking delay
         if a:
-            time.sleep(5)
+            eventlet.sleep(5)
         else:
-            time.sleep(random.uniform(0.05, 2))
+            eventlet.sleep(random.uniform(0.05, 2))
 
 gemini_instance = Gemini(model='gemini-2.0-flash')
 
 # ----------------- WebSocket Handlers -----------------
 
+@socketio.on('connect')
+def handle_connect():
+    logging.info("Client connected")
+    emit('connected', {'data': 'Connected to server'})
+
 @socketio.on('translate')
 def handle_translate(data):
-    # Handle translation requests via WebSocket.
     text = data.get('text', '')
     session_id = data.get('sessionId', '')
     if not text:
@@ -200,7 +189,6 @@ def handle_translate(data):
 
 @socketio.on('audio_stream')
 def handle_audio_stream(data):
-    # Handle incoming audio streams (Base64 encoded) and send an acknowledgment.
     sessionId = data.get('sessionId', 'unknown')
     audio_b64 = data.get('data', '')
     try:
@@ -214,7 +202,6 @@ def handle_audio_stream(data):
 
 @app.route('/', methods=['GET'])
 def index():
-    # Basic index endpoint.
     return '<h2>Server is running! Use /echo, /upload, /test_translation, or connect via WebSocket.</h2>'
 
 if __name__ == '__main__':
