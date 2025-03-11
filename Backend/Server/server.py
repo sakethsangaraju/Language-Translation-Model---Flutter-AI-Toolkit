@@ -15,7 +15,8 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename  # New: for safe filenames
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +41,7 @@ if not os.path.exists(UPLOAD_FOLDER):
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable not set")
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ----------------- REST Endpoints -----------------
 
@@ -104,6 +105,7 @@ def test_translation():
 
 class Gemini:
     def __init__(self, model='gemini-2.0-flash'):
+        self.client = client
         self.model = model
         self.connection = True
 
@@ -118,7 +120,6 @@ class Gemini:
             raise ConnectionError("Server disconnected")
         if not message:
             return "No message received"
-        self.latency_simulation()
         prompt = f"""
 You are a translator from English to Spanish.
 Respond only in valid JSON with exactly one key: "translation".
@@ -129,16 +130,15 @@ Now, translate this text:
 "{message}"
         """
         try:
-            model_instance = genai.GenerativeModel(
-                model_name=self.model,
-                generation_config={
-                    "temperature": 0.0,
-                    "top_p": 1.0,
-                    "top_k": 1,
-                    "max_output_tokens": 1024,
-                },
-            )
-            response = model_instance.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=512,
+                    temperature=0.7,
+                    top_p=0.9,
+                    top_k=50)
+)
             raw_output = response.text.strip()
             logging.info("Gemini raw output:\n%s", raw_output)
             if not raw_output:
@@ -160,13 +160,6 @@ Now, translate this text:
         except Exception as e:
             logging.error("Error during Gemini translation: %s", e)
             return "Translation error."
-
-    def latency_simulation(self, a=False):
-        # Use eventlet.sleep for non-blocking delay
-        if a:
-            eventlet.sleep(5)
-        else:
-            eventlet.sleep(random.uniform(0.05, 2))
 
 gemini_instance = Gemini(model='gemini-2.0-flash')
 
