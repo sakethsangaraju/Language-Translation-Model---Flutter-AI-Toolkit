@@ -12,7 +12,11 @@ import 'package:logger/logger.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:record/record.dart';
 import 'webrtc_helper.dart';
+
 import 'dart:html' as html;             //ignore for now
+
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 
 void main() {
   runApp(const MyApp());
@@ -57,7 +61,10 @@ class _CommunicationScreenState extends State<CommunicationScreen>
   io.Socket? _socket;
   final Logger logger = Logger();
 
+
   // Add WebRTC helper
+
+
   final WebRTCHelper _webRTCHelper = WebRTCHelper();
   bool isWebRTCEnabled = false;
   bool isWebRTCConnected = false;
@@ -76,16 +83,21 @@ class _CommunicationScreenState extends State<CommunicationScreen>
       });
     });
 
+
     // Initialize socket connection
+
     _setupSocketConnection();
   }
 
   void _setupSocketConnection() {
+
     // Your existing socket setup code
+
     _socket = io.io('http://127.0.0.1:8009', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': true,
     });
+
 
     // Connect the shared WebSocket
     _socket!.connect();
@@ -95,6 +107,13 @@ class _CommunicationScreenState extends State<CommunicationScreen>
       logger.d('Socket connected');
 
       // Initialize WebRTC after socket connection is established
+
+    _socket!.connect();
+
+    _socket!.on('connect', (_) {
+      logger.d('Socket connected');
+
+
       _initializeWebRTC();
     });
 
@@ -105,11 +124,20 @@ class _CommunicationScreenState extends State<CommunicationScreen>
           responseText = "Server disconnected. Please reload the page.";
         });
       }
+
     });
 
     _socket!.on('connected', (data) {
       logger.d('Socket connected: $data');
     });
+
+
+    });
+
+    _socket!.on('connected', (data) {
+      logger.d('Socket connected: $data');
+    });
+
 
     _socket!.on('translation_final', (data) {
       logger.d('Translation final received: ${data.toString()}');
@@ -133,6 +161,7 @@ class _CommunicationScreenState extends State<CommunicationScreen>
       }
     });
 
+
     // Initialize audio processing
     final sessionId = 'webrtc-${DateTime.now().millisecondsSinceEpoch}';
     logger.d('Creating new WebRTC session: $sessionId');
@@ -141,9 +170,17 @@ class _CommunicationScreenState extends State<CommunicationScreen>
   }
 
   // Initialize WebRTC
+
+    // Audio processing
+    final sessionId = 'webrtc-${DateTime.now().millisecondsSinceEpoch}';
+    logger.d('Creating new WebRTC session: $sessionId');
+
+  }
+
   void _initializeWebRTC() {
     if (_socket != null) {
       _webRTCHelper.initialize(_socket!);
+
 
       // Set up callbacks for translation
       _webRTCHelper.onTranslation = (text) {
@@ -157,7 +194,9 @@ class _CommunicationScreenState extends State<CommunicationScreen>
     }
   }
 
+
   // End WebRTC call
+
   void _endWebRTCCall() async {
     if (isWebRTCEnabled) {
       try {
@@ -273,7 +312,11 @@ class _CommunicationScreenState extends State<CommunicationScreen>
         if (mounted && isLoading) {
           setState(() {
             isLoading = false;
+
             responseText = "Request timed out.";
+
+            responseText = "Request timed out. Please try again.";
+
           });
         }
       });
@@ -351,6 +394,9 @@ class _CommunicationScreenState extends State<CommunicationScreen>
                     ],
                   ),
                 ),
+
+                // 2) Image tab
+
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
@@ -378,6 +424,9 @@ class _CommunicationScreenState extends State<CommunicationScreen>
                     ],
                   ),
                 ),
+
+                // 3) Audio Streaming Tab (WS)
+
                 AudioStreamWidget(socket: _socket!),
               ],
             ),
@@ -398,15 +447,26 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
   final Logger logger = Logger();
   late final io.Socket _socket;
   bool _isRecording = false;
+
   bool _isProcessing = false;            // planning to use this for processing state
   String? _error;
   String _status = "Connecting...";        // planning to use this for status
   bool _isConnected = false;                 // planning to use this for connection state
+
+  bool _isProcessing = false;
+  String? _error;
+  String _status = "Connecting...";
+  bool _isConnected = false;
+
   final _player = AudioPlayer();
   bool _isPlaying = false;
   String? _translatedText;
   String? _audioB64;
+
   String _sessionId = 'audio-session';                //ignore for now
+
+  String _sessionId = 'audio-session';
+
   final _audioRecorder = AudioRecorder();
   Timer? _recordingTimer;
 
@@ -421,6 +481,14 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
 
   // WebRTC-related variables
   bool _useWebRTC = false; // Toggle between WebRTC and WebSocket
+
+  dynamic _webRecorder;
+  dynamic _webStream;
+  List<dynamic> _recordedChunks = [];
+  String newSessionId = '';
+
+  bool _useWebRTC = false; // WebRTC vs WebSocket
+
   bool _isWebRTCConnected = false;
   final WebRTCHelper _webRTCHelper = WebRTCHelper();
 
@@ -434,7 +502,9 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
     // Initialize WebRTC helper
     _initializeWebRTC();
 
+
     // Listen to player state changes (restored from original code)
+
     _player.playerStateStream.listen((state) {
       if (state.processingState == ProcessingState.completed) {
         if (mounted) {
@@ -476,11 +546,16 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
         //_isProcessing = false;
       });
 
+
       // Play the received audio
       _playTTS();
     };
 
     // Add callback for raw audio capture
+
+      _playTTS();
+    };
+
     _webRTCHelper.onRawAudioCaptured = (rawAudio) {
       setState(() {
         _rawAudioData = rawAudio;
@@ -492,7 +567,11 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
     logger.i('WebRTC initialized in AudioStreamWidget');
   }
 
+
   // Toggle WebRTC mode
+
+  // Toggle WebRTC
+
   void _toggleWebRTC(bool useWebRTC) {
     if (useWebRTC == _useWebRTC) return;
 
@@ -501,15 +580,23 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
     });
 
     if (useWebRTC) {
+
       // Start WebRTC call when switching to WebRTC mode
       _startWebRTCCall();
     } else {
       // End WebRTC call when switching to WebSocket mode
+
+      _startWebRTCCall();
+    } else {
+
       _endWebRTCCall();
     }
   }
 
+
   // Start WebRTC call
+
+
   void _startWebRTCCall() async {
     try {
       bool success = await _webRTCHelper.startCall();
@@ -528,6 +615,7 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
   }
 
   // End WebRTC call
+
   void _endWebRTCCall() async {
     try {
       await _webRTCHelper.endCall();
@@ -540,15 +628,22 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
       logger.e('Error ending WebRTC call: $e');
     }
   }
+
   // Toggle WebRTC recording
   void _toggleWebRTCRecording() {
     if (_isRecording) {
       // Stop recording
+
+
+  void _toggleWebRTCRecording() {
+    if (_isRecording) {
+
       _webRTCHelper.stopRecording();
       setState(() {
         _isRecording = false;
         _isProcessing = true;
         _status = "Processing WebRTC audio...";
+
       });
     } else {
       // Start recording
@@ -561,6 +656,19 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
         _rawAudioData = null;
         _error = null;
       });
+
+      });
+    } else {
+      _webRTCHelper.startRecording();
+      setState(() {
+        _isRecording = true;
+        _status = "Recording via WebRTC...";
+        _translatedText = null;
+        _audioB64 = null;
+        _rawAudioData = null;
+        _error = null;
+      });
+
     }
   }
 
@@ -598,7 +706,11 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
       }
 
       final audioData = data['audio'];
+
       final englishText = data['english_text'];     //  planning to use this for english text
+
+      final englishText = data['english_text'];
+
       final spanishText = data['spanish_text'];
 
       setState(() {
@@ -670,12 +782,21 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
       await _player.stop();
 
       // Make sure base64 is properly padded
+
+      await _player.stop();
+
+      // Make sure base64 is padded
+
       String paddedAudio = _audioB64!;
       while (paddedAudio.length % 4 != 0) {
         paddedAudio += '=';
       }
 
+
       // Decode the base64 string to bytes
+
+      //base64 string to bytes
+
       final bytes = base64Decode(paddedAudio);
       logger.i("Decoded audio data: ${bytes.length} bytes");
 
@@ -688,6 +809,7 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
         return;
       }
 
+
       // Create a data URL and play
       final base64Sound = base64Encode(bytes);
       final url = 'data:audio/mp3;base64,$base64Sound';
@@ -696,6 +818,13 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
       await _player.setUrl(url);
 
       // Play the audio
+
+      final base64Sound = base64Encode(bytes);
+      final url = 'data:audio/mp3;base64,$base64Sound';
+
+      await _player.setUrl(url);
+
+
       await _player.play();
       logger.i("Audio playback started");
     } catch (e) {
@@ -707,7 +836,11 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
     }
   }
 
+
   // Method to play back the raw recording
+
+  // playback recording
+
   Future<void> _playRawRecording() async {
     if (_rawAudioData == null || _rawAudioData!.isEmpty) {
       setState(() {
@@ -724,6 +857,7 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
 
       logger.i("Playing raw recording (${_rawAudioData!.length} bytes)");
 
+
       // Create a URL from the raw audio data
       final blob = html.Blob([_rawAudioData!], 'audio/webm');
       final url = html.Url.createObjectUrl(blob);
@@ -733,6 +867,14 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
       await _player.play();
 
       // Listen for completion
+
+      final blob = html.Blob([_rawAudioData!], 'audio/webm');
+      final url = html.Url.createObjectUrl(blob);
+
+      await _player.setUrl(url);
+      await _player.play();
+
+
       _player.playerStateStream.listen((state) {
         if (state.processingState == ProcessingState.completed) {
           if (mounted) {
@@ -740,7 +882,9 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
               _isPlaying = false;
             });
           }
+
           // Clean up URL
+
           html.Url.revokeObjectUrl(url);
         }
       });
@@ -758,7 +902,6 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
     _recordingTimer?.cancel();
     _audioRecorder.dispose();
     _player.dispose();
-
     // Clean up web resources
     if (kIsWeb && _webStream != null) {
       _webStream!.getTracks().forEach((track) => track.stop());
@@ -778,7 +921,9 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+
             // Simplified WebRTC Controls
+
             Container(
               padding: const EdgeInsets.symmetric(vertical: 8.0),
               decoration: BoxDecoration(
@@ -787,11 +932,16 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+
                   // Title - simplified
                   Text("Audio Recording"),
                   SizedBox(height: 8),
 
                   // Toggle Switch - simplified
+
+                  Text("Audio Recording"),
+                  SizedBox(height: 8),
+                  // Toggle Switch 
                   Row(
                     children: [
                       Text("Use WebRTC: "),
@@ -802,14 +952,16 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
                     ],
                   ),
 
+
                   // Status - no colors
+
                   Text(
                     "Status: ${_useWebRTC ? (_isWebRTCConnected ? 'Connected' : 'Connecting...') : 'Not using WebRTC'}",
                   ),
 
                   SizedBox(height: 8),
-
                   // Start/Stop Recording Button - no colors
+                  // Start/Stop Recording Button
                   if (_useWebRTC)
                     ElevatedButton(
                       onPressed:
@@ -818,7 +970,9 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
                           _isRecording ? "Stop Speaking" : "Start Speaking"),
                     ),
 
+
                   // Play Raw Audio button - no colors
+                  // Play Raw Audio button
                   if (_useWebRTC && !_isRecording && _rawAudioData != null) ...[
                     SizedBox(height: 8),
                     ElevatedButton(
@@ -830,11 +984,11 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
                   ],
 
                   // Translation text - simplified
+
                   if (_useWebRTC && _translatedText != null) ...[
                     SizedBox(height: 8),
                     Text("Translation: $_translatedText"),
                   ],
-
                   // Error display - simplified
                   if (_error != null) ...[
                     SizedBox(height: 8),
@@ -844,6 +998,8 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
               ),
             ),
             // Only show original UI if not in WebRTC mode - simplified
+
+            // Only show original UI if not in WebRTC mode
             if (!_useWebRTC) ...[
               SizedBox(height: 16),
               Container(
