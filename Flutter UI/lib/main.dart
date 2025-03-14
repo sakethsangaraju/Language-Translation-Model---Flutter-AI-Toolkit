@@ -1,13 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:socket_io_client/socket_io_client.dart' as socketio;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:logger/logger.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:record/record.dart';
+import 'webrtc_helper.dart';
+
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 
 void main() {
   runApp(const MyApp());
@@ -41,28 +48,28 @@ class _CommunicationScreenState extends State<CommunicationScreen>
   bool isLoading = false;
   String? responseText; // For REST responses and translation results
   String? imageUrl; // For uploaded image URL
+  final TextEditingController _messageController = TextEditingController();
+  bool isAudioMode = false;
+  List<Map<String, String>> chatHistory = [];
 
-  // REST server endpoint (update if needed—for emulators, use proper IP)
-  final String serverAddress = 'http://localhost:8008';
+  // Server endpoint (update if needed)
+  final String serverAddress = 'http://127.0.0.1:8009';
 
-  // Shared WebSocket connection for translation and audio streaming.
-  final socketio.Socket _socket = socketio.io(
-    'http://localhost:8008',
-    <String, dynamic>{
-      'transports': ['websocket'],
-      'autoConnect': false,
-    },
-  );
-
+  // Shared WebSocket connection for translation and audio streaming
+  io.Socket? _socket;
   final Logger logger = Logger();
+
+  final WebRTCHelper _webRTCHelper = WebRTCHelper();
+  bool isWebRTCEnabled = false;
+  bool isWebRTCConnected = false;
 
   @override
   void initState() {
     super.initState();
-    // Three tabs: Text (REST), Image (REST), Audio (WS)
+    // Three tabs: Text, Image, Audio
     _tabController = TabController(length: 3, vsync: this);
 
-    // Clear displayed data when switching tabs.
+    // Clear displayed data when switching tabs
     _tabController.addListener(() {
       setState(() {
         responseText = null;
@@ -70,59 +77,126 @@ class _CommunicationScreenState extends State<CommunicationScreen>
       });
     });
 
-    // Connect the shared WebSocket.
-    _socket.connect();
-    _socket.on('connected', (data) {
-      logger.d('WebSocket connected: $data');
+    _setupSocketConnection();
+  }
+
+  void _setupSocketConnection() {
+    _socket = io.io('http://127.0.0.1:8009', <String, dynamic>{
+      'transports': ['websocket'],
+      'autoConnect': true,
     });
-    _socket.on('translation_update', (data) {
-      logger.d('Translation Update: ${data['data']}');
+
+    _socket!.connect();
+
+    _socket!.on('connect', (_) {
+      logger.d('Socket connected');
+
+      _initializeWebRTC();
     });
-    _socket.on('translation_final', (data) {
-      logger.d('Translation Final: ${data['data']}');
+
+    _socket!.on('disconnect', (_) {
+      logger.d('Socket disconnected');
+      if (mounted) {
+        setState(() {
+          responseText = "Server disconnected. Please reload the page.";
+        });
+      }
+    });
+
+    _socket!.on('connected', (data) {
+      logger.d('Socket connected: $data');
+    });
+
+    _socket!.on('translation_final', (data) {
+      logger.d('Translation final received: ${data.toString()}');
+      logger.d('Translation result data: ${data['data']}');
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+          responseText = data['data']?.toString().trim();
+          logger.d('Updated UI with translation: $responseText');
+        });
+      }
+    });
+
+    _socket!.on('translation_error', (data) {
+      logger.e('Translation error: $data');
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+          responseText = "Error: ${data['error'] ?? 'Unknown error occurred'}";
+        });
+      }
+    });
+
+    // Audio processing
+    final sessionId = 'webrtc-${DateTime.now().millisecondsSinceEpoch}';
+    logger.d('Creating new WebRTC session: $sessionId');
+
+  }
+
+  void _initializeWebRTC() {
+    if (_socket != null) {
+      _webRTCHelper.initialize(_socket!);
+
+      _webRTCHelper.onTranslation = (text) {
+        logger.i('Received translation via WebRTC: $text');
+      };
+
       setState(() {
-        responseText = data['data'];
+        isWebRTCEnabled = true;
       });
-    });
-    _socket.on('audio_ack', (data) {
-      logger.d('Audio ack: $data');
-    });
-    _socket.on('error', (data) {
-      logger.e('Socket error: $data');
-    });
+      logger.i('WebRTC initialized with socket');
+    }
+  }
+
+  void _endWebRTCCall() async {
+    if (isWebRTCEnabled) {
+      try {
+        await _webRTCHelper.endCall();
+        setState(() {
+          isWebRTCConnected = false;
+        });
+        logger.i('WebRTC call ended');
+      } catch (e) {
+        logger.e('Error ending WebRTC call: $e');
+      }
+    }
   }
 
   @override
   void dispose() {
     _textController.dispose();
     _tabController.dispose();
-    _socket.dispose();
+    _endWebRTCCall();
+    _socket?.disconnect();
+    _messageController.dispose();
     super.dispose();
   }
 
   // ----------------- REST: /echo -------------------
   Future<void> sendText() async {
-    final text = _textController.text;
-    if (text.isEmpty) return;
+    final txt = _textController.text;
+    if (txt.isEmpty) return;
     setState(() {
       isLoading = true;
       responseText = null;
       imageUrl = null;
     });
     try {
-      final response = await http.post(
+      final resp = await http.post(
         Uri.parse('$serverAddress/echo'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'text': text}),
+        body: jsonEncode({'text': txt}),
       );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
         setState(() {
           responseText = "${data['message']} (Echo: ${data['echo']})";
         });
       } else {
         setState(() {
-          responseText = 'Error: ${response.reasonPhrase}';
+          responseText = 'Error: ${resp.reasonPhrase}';
         });
       }
     } catch (e) {
@@ -138,36 +212,33 @@ class _CommunicationScreenState extends State<CommunicationScreen>
   // ----------------- REST: /upload -------------------
   Future<void> sendImage() async {
     final picker = ImagePicker();
-    final XFile? pickedFile =
-        await picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile == null) return;
+    final file = await picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
     setState(() {
       isLoading = true;
       responseText = null;
       imageUrl = null;
     });
     try {
-      final bytes = await pickedFile.readAsBytes();
-      var request =
-          http.MultipartRequest('POST', Uri.parse('$serverAddress/upload'));
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          bytes,
-          filename: pickedFile.name,
-        ),
+      final bytes = await file.readAsBytes();
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$serverAddress/upload'),
       );
-      var streamedResponse = await request.send();
-      var response = await http.Response.fromStream(streamedResponse);
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+      request.files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: file.name),
+      );
+      final streamed = await request.send();
+      final resp = await http.Response.fromStream(streamed);
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
         setState(() {
           responseText = data['message'];
           imageUrl = data['url'];
         });
       } else {
         setState(() {
-          responseText = 'Error: ${response.reasonPhrase}';
+          responseText = 'Error: ${resp.reasonPhrase}';
         });
       }
     } catch (e) {
@@ -181,69 +252,52 @@ class _CommunicationScreenState extends State<CommunicationScreen>
   }
 
   // ----------------- WebSocket: Send translation request -------------------
-  void sendMessageWebSocket() {
-    final text = _textController.text;
-    if (text.isNotEmpty) {
-      _socket.emit('translate', {
-        'sessionId': 'session-${DateTime.now().millisecondsSinceEpoch}',
-        'text': text
+  void sendMessageWS() {
+    final txt = _textController.text;
+    if (txt.isNotEmpty) {
+      // Show loading indicator
+      setState(() {
+        isLoading = true;
       });
+
+      // Set a timeout to prevent indefinite loading
+      Timer(const Duration(seconds: 10), () {
+        if (mounted && isLoading) {
+          setState(() {
+            isLoading = false;
+            responseText = "Request timed out. Please try again.";
+          });
+        }
+      });
+
+      final sessionId = 'session-${DateTime.now().millisecondsSinceEpoch}';
+      logger.d('Sending translation request with sessionId: $sessionId');
+
+      _socket!.emit('translate', {'sessionId': sessionId, 'text': txt});
       _textController.clear();
     }
   }
 
-  // Simple loading widget.
-  Widget _buildLoading() {
-    return const Center(child: CircularProgressIndicator());
-  }
-
-  // Display responses (text and/or image).
-  Widget _buildResponseDisplay() {
-    if (responseText != null || imageUrl != null) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (responseText != null)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Text(
-                responseText!,
-                textAlign: TextAlign.center,
-                style:
-                    const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-          if (imageUrl != null)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Image.network(imageUrl!, fit: BoxFit.contain),
-            ),
-        ],
-      ).animate().fadeIn(duration: 500.ms);
-    }
-    return const SizedBox.shrink();
-  }
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext ctx) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Echo App'),
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
-            Tab(text: 'Text (REST)'),
-            Tab(text: 'Image (REST)'),
-            Tab(text: 'Audio (WS)'),
+            Tab(text: 'Text'),
+            Tab(text: 'Image'),
+            Tab(text: 'Audio'),
           ],
         ),
       ),
       body: isLoading
-          ? _buildLoading()
+          ? const Center(child: CircularProgressIndicator())
           : TabBarView(
               controller: _tabController,
               children: [
-                // Text Tab (REST)
+                // 1) Text tab with animations
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
@@ -256,26 +310,40 @@ class _CommunicationScreenState extends State<CommunicationScreen>
                           contentPadding: EdgeInsets.all(16),
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 12),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                           ElevatedButton(
                             onPressed: sendText,
-                            child: const Text('Send Text (REST)'),
+                            child: const Text("Send Text (REST)"),
                           ),
                           ElevatedButton(
-                            onPressed: sendMessageWebSocket,
-                            child: const Text('Translate (WS)'),
+                            onPressed: sendMessageWS,
+                            child: const Text("Translate (WS)"),
                           ),
                         ],
                       ),
                       const SizedBox(height: 20),
-                      _buildResponseDisplay(),
+                      if (responseText != null)
+                        Text(
+                          responseText!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        )
+                            .animate()
+                            .fadeIn(duration: const Duration(milliseconds: 600))
+                            .slideY(begin: 0.5, end: 0)
+                            .then(
+                              delay: const Duration(milliseconds: 200),
+                            )
+                            .shimmer(duration: const Duration(seconds: 1)),
                     ],
                   ),
                 ),
-                // Image Upload Tab (REST)
+                // 2) Image tab
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
@@ -283,139 +351,396 @@ class _CommunicationScreenState extends State<CommunicationScreen>
                     children: [
                       ElevatedButton(
                         onPressed: sendImage,
-                        child: const Text('Upload Image'),
+                        child: const Text("Upload Image"),
                       ),
-                      const SizedBox(height: 20),
-                      _buildResponseDisplay(),
+                      const SizedBox(height: 16),
+                      if (responseText != null)
+                        Text(
+                          responseText!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ).animate().fadeIn(
+                            duration: const Duration(milliseconds: 600)),
+                      if (imageUrl != null)
+                        Image.network(imageUrl!)
+                            .animate()
+                            .fadeIn(
+                              duration: const Duration(milliseconds: 800),
+                            )
+                            .slideY(begin: 0.2, end: 0),
                     ],
                   ),
                 ),
-                // Audio Streaming Tab (WS)
-                AudioStreamWidget(sharedSocket: _socket),
+                // 3) Audio Streaming Tab (WS)
+                AudioStreamWidget(socket: _socket!),
               ],
             ),
     );
   }
 }
 
-// AudioStreamWidget: Handles audio recording and streaming via the shared WebSocket.
+// AudioStreamWidget: Handles audio recording and streaming via WebSocket
 class AudioStreamWidget extends StatefulWidget {
-  final socketio.Socket? sharedSocket;
-  const AudioStreamWidget({super.key, this.sharedSocket});
+  final io.Socket socket;
+  const AudioStreamWidget({super.key, required this.socket});
+
   @override
-  _AudioStreamWidgetState createState() => _AudioStreamWidgetState();
+  State<AudioStreamWidget> createState() => _AudioStreamWidgetState();
 }
 
 class _AudioStreamWidgetState extends State<AudioStreamWidget> {
-  late socketio.Socket _audioSocket;
-  MediaStream? _mediaStream;
-  bool _isRecording = false;
-  Timer? _audioTimer;
   final Logger logger = Logger();
-  String _audioAckMessage = ""; // New state variable to store the ack message
+  late final io.Socket _socket;
+  bool _isRecording = false;
+  bool _isProcessing = false;
+  String? _error;
+  String _status = "Connecting...";
+  bool _isConnected = false;
+  final _player = AudioPlayer();
+  bool _isPlaying = false;
+  String? _translatedText;
+  String? _audioB64;
+  String _sessionId = 'audio-session';
+  final _audioRecorder = AudioRecorder();
+  Timer? _recordingTimer;
+
+  // Store raw audio for direct playback
+  Uint8List? _rawAudioData;
+
+  dynamic _webRecorder;
+  dynamic _webStream;
+  List<dynamic> _recordedChunks = [];
+  String newSessionId = '';
+
+  bool _useWebRTC = false; // WebRTC vs WebSocket
+  bool _isWebRTCConnected = false;
+  final WebRTCHelper _webRTCHelper = WebRTCHelper();
 
   @override
   void initState() {
     super.initState();
-    _audioSocket = widget.sharedSocket ??
-        socketio.io('http://localhost:8008', <String, dynamic>{
-          'transports': ['websocket'],
-          'autoConnect': false,
-        });
-    if (widget.sharedSocket == null) {
-      _audioSocket.connect();
-    }
-    _audioSocket.on('audio_ack', (data) {
-      logger.d('Audio ack: $data');
+    _socket = widget.socket;
+    _setupSocketListeners();
+    _preloadPlayer();
+
+    // Initialize WebRTC helper
+    _initializeWebRTC();
+
+    _player.playerStateStream.listen((state) {
+      if (state.processingState == ProcessingState.completed) {
+        if (mounted) {
+          setState(() {
+            _isPlaying = false;
+          });
+        }
+      }
+    });
+  }
+
+  void _initializeWebRTC() {
+    _webRTCHelper.initialize(_socket);
+
+    // callbacks
+    _webRTCHelper.onTranscription = (text) {
       setState(() {
-        _audioAckMessage = data['message'] ?? "";
+        // We need to keep track of the text even though we don't display it directly
+        // It's used internally by the WebRTC helper
+        _translatedText = text;
+      });
+    };
+
+    _webRTCHelper.onTranslation = (text) {
+      setState(() {
+        _translatedText = text;
+      });
+    };
+
+    _webRTCHelper.onError = (error) {
+      setState(() {
+        _error = error;
+      });
+    };
+
+    _webRTCHelper.onAudioReceived = (audioBase64) {
+      setState(() {
+        _audioB64 = audioBase64;
+        //_isProcessing = false;
+      });
+
+      _playTTS();
+    };
+
+    _webRTCHelper.onRawAudioCaptured = (rawAudio) {
+      setState(() {
+        _rawAudioData = rawAudio;
+        //_isProcessing = false;
+      });
+      logger.i("Received raw audio from WebRTC: ${rawAudio.length} bytes");
+    };
+
+    logger.i('WebRTC initialized in AudioStreamWidget');
+  }
+
+  // Toggle WebRTC
+  void _toggleWebRTC(bool useWebRTC) {
+    if (useWebRTC == _useWebRTC) return;
+
+    setState(() {
+      _useWebRTC = useWebRTC;
+    });
+
+    if (useWebRTC) {
+      _startWebRTCCall();
+    } else {
+      _endWebRTCCall();
+    }
+  }
+
+  void _startWebRTCCall() async {
+    try {
+      bool success = await _webRTCHelper.startCall();
+      setState(() {
+        _isWebRTCConnected = success;
+        _status = success ? "WebRTC connected" : "WebRTC connection failed";
+      });
+      logger.i(
+          'WebRTC call ${success ? "started" : "failed"} in AudioStreamWidget');
+    } catch (e) {
+      logger.e('Error starting WebRTC call: $e');
+      setState(() {
+        _error = "Error starting WebRTC call: $e";
+      });
+    }
+  }
+
+  void _endWebRTCCall() async {
+    try {
+      await _webRTCHelper.endCall();
+      setState(() {
+        _isWebRTCConnected = false;
+        _status = "WebRTC call ended";
+      });
+      logger.i('WebRTC call ended in AudioStreamWidget');
+    } catch (e) {
+      logger.e('Error ending WebRTC call: $e');
+    }
+  }
+
+  void _toggleWebRTCRecording() {
+    if (_isRecording) {
+      _webRTCHelper.stopRecording();
+      setState(() {
+        _isRecording = false;
+        _isProcessing = true;
+        _status = "Processing WebRTC audio...";
+      });
+    } else {
+      _webRTCHelper.startRecording();
+      setState(() {
+        _isRecording = true;
+        _status = "Recording via WebRTC...";
+        _translatedText = null;
+        _audioB64 = null;
+        _rawAudioData = null;
+        _error = null;
+      });
+    }
+  }
+
+  // Preload the audio player to solve the "first play doesn't work" issue
+  Future<void> _preloadPlayer() async {
+    try {
+      // Create silent audio data and play it to initialize the player
+      final silentAudioBase64 =
+          "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tAwAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADwAD///////////////////////////////////////////8AAAA8TEFNRTMuMTAwAc0AAAAAAAAAABSAJAJAQgAAgAAAA8DWxzxJAAAAAAAAAAAAAAAAAAAA";
+      final silentAudioUrl = 'data:audio/mp3;base64,$silentAudioBase64';
+
+      if (kIsWeb) {
+        logger.i("Web platform detected, preparing audio player");
+      } else {
+        await _player.setUrl(silentAudioUrl);
+        await _player.play();
+        await _player.stop();
+        logger.i("Preloaded audio player successfully");
+      }
+    } catch (e) {
+      logger.e("Error preloading audio player: $e");
+    }
+  }
+
+  void _setupSocketListeners() {
+    // Listen for translation results
+    widget.socket.on('translation_result', (data) {
+      final responseSessionId = data['sessionId'];
+      logger.i(
+          "Received translation result for session: $responseSessionId (current: $_sessionId)");
+
+      if (responseSessionId != _sessionId) {
+        logger.w("Session ID mismatch, ignoring response");
+        return;
+      }
+
+      final audioData = data['audio'];
+      final englishText = data['english_text'];
+      final spanishText = data['spanish_text'];
+
+      setState(() {
+        _status = "Translation received";
+        _isProcessing = false;
+        _audioB64 = audioData;
+        _translatedText = spanishText;
+        _error = null;
+      });
+
+      // Play the audio automatically
+      if (audioData != null && audioData.isNotEmpty) {
+        _playTTS();
+      }
+    });
+
+    // Listen for errors
+    widget.socket.on('audio_error', (data) {
+      final responseSessionId = data['sessionId'];
+      logger.e(
+          "Audio error for session: $responseSessionId (current: $_sessionId): ${data['error']}");
+
+      if (responseSessionId == _sessionId) {
+        setState(() {
+          _status = "Error";
+          _isProcessing = false;
+          _error = data['error'];
+          _translatedText = data['spanish_text'];
+        });
+      }
+    });
+
+    // Listen for connection events
+    widget.socket.on('connect', (_) {
+      logger.i("Socket connected");
+      setState(() {
+        _isConnected = true;
+        _status = "Connected";
       });
     });
+
+    widget.socket.on('disconnect', (_) {
+      logger.w("Socket disconnected");
+      setState(() {
+        _isConnected = false;
+        _status = "Disconnected";
+      });
+    });
+  }
+
+  Future<void> _playTTS() async {
+    if (_audioB64 == null || _audioB64!.isEmpty) {
+      logger.e("No audio data to play");
+      setState(() {
+        _error = "No audio data to play";
+      });
+      return;
+    }
+
+    setState(() {
+      _isPlaying = true;
+      _error = null;
+    });
+
+    try {
+      logger.i("Decoding audio data from base64 (${_audioB64!.length} chars)");
+
+      await _player.stop();
+
+      // Make sure base64 is padded
+      String paddedAudio = _audioB64!;
+      while (paddedAudio.length % 4 != 0) {
+        paddedAudio += '=';
+      }
+
+      //base64 string to bytes
+      final bytes = base64Decode(paddedAudio);
+      logger.i("Decoded audio data: ${bytes.length} bytes");
+
+      if (bytes.length < 100) {
+        logger.e("Audio data too small: ${bytes.length} bytes");
+        setState(() {
+          _error = "Audio data too small";
+          _isPlaying = false;
+        });
+        return;
+      }
+
+      final base64Sound = base64Encode(bytes);
+      final url = 'data:audio/mp3;base64,$base64Sound';
+
+      await _player.setUrl(url);
+
+      await _player.play();
+      logger.i("Audio playback started");
+    } catch (e) {
+      logger.e("Error playing TTS: $e");
+      setState(() {
+        _error = "Playback error: $e";
+        _isPlaying = false;
+      });
+    }
+  }
+
+  // playback recording
+  Future<void> _playRawRecording() async {
+    if (_rawAudioData == null || _rawAudioData!.isEmpty) {
+      setState(() {
+        _error = 'No recording available to play';
+      });
+      return;
+    }
+
+    try {
+      setState(() {
+        _isPlaying = true;
+        _error = null;
+      });
+
+      logger.i("Playing raw recording (${_rawAudioData!.length} bytes)");
+
+      final blob = html.Blob([_rawAudioData!], 'audio/webm');
+      final url = html.Url.createObjectUrl(blob);
+
+      await _player.setUrl(url);
+      await _player.play();
+
+      _player.playerStateStream.listen((state) {
+        if (state.processingState == ProcessingState.completed) {
+          if (mounted) {
+            setState(() {
+              _isPlaying = false;
+            });
+          }
+          html.Url.revokeObjectUrl(url);
+        }
+      });
+    } catch (e) {
+      logger.e("Error playing raw recording: $e");
+      setState(() {
+        _error = 'Error playing: $e';
+        _isPlaying = false;
+      });
+    }
   }
 
   @override
   void dispose() {
-    _mediaStream?.dispose();
-    _audioTimer?.cancel();
-    if (widget.sharedSocket == null) {
-      _audioSocket.dispose();
+    _recordingTimer?.cancel();
+    _audioRecorder.dispose();
+    _player.dispose();
+
+    if (kIsWeb && _webStream != null) {
+      _webStream!.getTracks().forEach((track) => track.stop());
+      _webStream = null;
     }
+
+    _socket.disconnect();
+    _socket.dispose();
     super.dispose();
-  }
-
-  Future<void> _startRecording() async {
-    final Map<String, dynamic> mediaConstraints = {
-      'audio': true,
-      'video': false,
-    };
-
-    try {
-      _mediaStream =
-          await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      setState(() {
-        _isRecording = true;
-      });
-      logger.d('Audio recording started.');
-
-      _audioTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-        int chunkSize = 100 + Random().nextInt(50);
-        List<int> randomBytes =
-            List.generate(chunkSize, (_) => Random().nextInt(256));
-        String audioBase64 = base64Encode(randomBytes);
-        _audioSocket.emit('audio_stream', {
-          'sessionId': 'session-${DateTime.now().millisecondsSinceEpoch}',
-          'data': audioBase64,
-        });
-        logger.d('Sent audio chunk of $chunkSize bytes');
-      });
-    } catch (e) {
-      logger.e('Error starting audio capture: $e');
-    }
-  }
-
-  void _stopRecording() {
-    _audioTimer?.cancel();
-    _audioTimer = null;
-    _mediaStream?.getAudioTracks().forEach((track) {
-      track.stop();
-    });
-    _mediaStream = null;
-    setState(() {
-      _isRecording = false;
-    });
-    String finalMessage = 'audio_stream_ended';
-    String finalBase64 = base64Encode(utf8.encode(finalMessage));
-    _audioSocket.emit('audio_stream', {
-      'sessionId': 'session-${DateTime.now().millisecondsSinceEpoch}',
-      'data': finalBase64,
-    });
-    logger.d('Audio recording stopped. Sent final message.');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Audio Streaming'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            Text(_isRecording ? 'Recording audio...' : 'Not Recording'),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _isRecording ? _stopRecording : _startRecording,
-              child: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-            ),
-            const SizedBox(height: 20),
-            if (_audioAckMessage.isNotEmpty)
-              Text('Ack: $_audioAckMessage',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-    );
   }
 }
