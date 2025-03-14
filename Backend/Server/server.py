@@ -66,14 +66,20 @@ else:
     logging.info("GEMINI_API_KEY found. Full functionality available.")
     TEST_MODE = False
 
-# Configure Gemini API
-genai.configure(api_key=GEMINI_API_KEY)
+# The newer Gemini SDK doesn't use configure() anymore
+# Instead, we create a client directly
+try:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    logging.info("Gemini client created successfully")
+except Exception as e:
+    logging.error(f"Error creating Gemini client: {e}")
+    client = None
+    TEST_MODE = True
 
 # API key in environment variable
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable not set")
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 # We'll create a global model instance after the TranslationModel class is defined
 
@@ -385,17 +391,22 @@ class TranslationModel:
             return
             
         logging.info("GEMINI_API_KEY found. Full functionality available.")
-        genai.configure(api_key=api_key)
+        # Don't use genai.configure anymore
         
         # Use gemini-1.5-pro by default, or fall back to gemini-pro
         model_name = "gemini-1.5-pro"
         logging.info(f"Initialized Gemini with model: {model_name}")
         
-        # Create the model instance
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={"temperature": 0.0, "max_output_tokens": 1024}
-        )
+        # Create the model instance using the client
+        try:
+            self.model = genai.GenerativeModel(
+                model_name=model_name,
+                generation_config={"temperature": 0.0, "max_output_tokens": 1024}
+            )
+            logging.info("GenerativeModel created successfully")
+        except Exception as e:
+            logging.error(f"Error creating GenerativeModel: {e}")
+            self.model = None
 
 @app.route('/test_translation', methods=['POST'])
 def test_translation():
@@ -420,7 +431,13 @@ class Gemini:
         self.client = client
         self.model = model
         self.connection = True
+        
     def conversation(self, text):
+        if not self.connection:
+            raise ConnectionError("Server disconnected")
+        if not text:
+            return "No message received"
+            
         try:
             import re  # Import re at the top level of the function
             
@@ -491,13 +508,6 @@ Now, translate this text:
             
             # Direct translation prompt that asks for just the translation
             prompt = f"""
-
-    def conversation(self, message):
-        if not self.connection:
-            raise ConnectionError("Server disconnected")
-        if not message:
-            return "No message received"
-        prompt = f"""
 You are a translator from English to Spanish.
 Respond only in valid JSON with exactly one key: "translation".
 No extra text, no code blocks, no commentary.
@@ -507,10 +517,6 @@ Now, translate this text:
 "{text}"
             """
             
-            response = self.model.generate_content(prompt)
-"{message}"
-        """
-        try:
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=prompt,
@@ -519,7 +525,7 @@ Now, translate this text:
                     temperature=0.7,
                     top_p=0.9,
                     top_k=50)
-)
+            )
             raw_output = response.text.strip()
             logging.info("Gemini raw output:\n%s", raw_output)
             
@@ -559,8 +565,7 @@ Now, translate this text:
         except Exception as e:
             logging.error(f"Gemini error: {e}")
             return "Translation error."
-
-
+            
     async def text_to_speech(self, text):
         """Generate speech from text using a TTS service"""
         try:
@@ -569,6 +574,7 @@ Now, translate this text:
         except Exception as e:
             logging.error(f"TTS error: {e}")
             return b""  # Return empty bytes
+
 # Create a global model instance
 model = None
 if GEMINI_API_KEY:
