@@ -66,14 +66,20 @@ else:
     logging.info("GEMINI_API_KEY found. Full functionality available.")
     TEST_MODE = False
 
-# Configure Gemini API
-genai.configure(api_key=GEMINI_API_KEY)
+# The newer Gemini SDK doesn't use configure() anymore
+# Instead, we create a client directly
+try:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    logging.info("Gemini client created successfully")
+except Exception as e:
+    logging.error(f"Error creating Gemini client: {e}")
+    client = None
+    TEST_MODE = True
 
 # API key in environment variable
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable not set")
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 # We'll create a global model instance after the TranslationModel class is defined
 
@@ -381,21 +387,85 @@ class TranslationModel:
         api_key = os.environ.get('GEMINI_API_KEY')
         if not api_key:
             logging.warning("No GEMINI_API_KEY found. Limited functionality.")
-            self.model = None
+            self.client = None
             return
             
         logging.info("GEMINI_API_KEY found. Full functionality available.")
-        genai.configure(api_key=api_key)
         
-        # Use gemini-1.5-pro by default, or fall back to gemini-pro
-        model_name = "gemini-1.5-pro"
-        logging.info(f"Initialized Gemini with model: {model_name}")
-        
-        # Create the model instance
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={"temperature": 0.0, "max_output_tokens": 1024}
-        )
+        # Store the client and model name
+        self.client = client  # Use the global Gemini client
+        self.model_name = "gemini-1.5-pro"  # Default model
+        logging.info(f"Initialized Gemini with model: {self.model_name}")
+    
+    def translate(self, text):
+        """Translate text from English to Spanish using Gemini"""
+        if not self.client:
+            logging.warning("No client available for translation")
+            return "Translation unavailable (no client)"
+            
+        try:
+            import re
+            
+            # Direct translation prompt
+            prompt = f"""
+You are a translator from English to Spanish.
+Respond only in valid JSON with exactly one key: "translation".
+No extra text, no code blocks, no commentary.
+For example:
+{{"translation": "Hola"}}
+Now, translate this text:
+"{text}"
+            """
+            
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=512,
+                    temperature=0.7,
+                    top_p=0.9,
+                    top_k=50
+                )
+            )
+            response_text = response.text.strip()
+            
+            logging.info("Gemini translation output: %s", response_text)
+            
+            # Try to parse as JSON first
+            try:
+                parsed = json.loads(response_text)
+                translation = parsed.get("translation", "").strip()
+                if translation:
+                    return translation
+            except json.JSONDecodeError:
+                logging.warning("Model did not produce valid JSON. Attempting fallback cleanup.")
+            
+            # If we have markdown code blocks, extract content
+            if "```" in response_text:
+                clean_text = re.sub(r'```.*?\n', '', response_text)
+                clean_text = re.sub(r'```', '', clean_text)
+                try:
+                    # Try to parse as JSON if it looks like JSON
+                    if clean_text.strip().startswith('{'):
+                        data = json.loads(clean_text)
+                        if "translation" in data:
+                            return data["translation"]
+                    # Return the cleaned text
+                    return clean_text.strip()
+                except:
+                    # Just return the text if parsing fails
+                    return clean_text.strip()
+            
+            # Remove any potential explanatory text
+            response_text = re.sub(r'^(the|in spanish|translation|this translates to|translated as).*?:', '', response_text, flags=re.IGNORECASE)
+            
+            # Remove quotation marks if present
+            response_text = response_text.strip('"\'')
+            
+            return response_text.strip()
+        except Exception as e:
+            logging.error(f"Translation error: {e}")
+            return "Translation error."
 
 @app.route('/test_translation', methods=['POST'])
 def test_translation():
@@ -405,7 +475,7 @@ def test_translation():
     text = data['text']
     logging.info("Test translation request: %s", text)
     try:
-        translation = gemini_instance.conversation(text)
+        translation = model.translate(text)
         return jsonify({
             'original': text,
             'translation': translation
@@ -420,7 +490,13 @@ class Gemini:
         self.client = client
         self.model = model
         self.connection = True
+        
     def conversation(self, text):
+        if not self.connection:
+            raise ConnectionError("Server disconnected")
+        if not text:
+            return "No message received"
+            
         try:
             import re  # Import re at the top level of the function
             
@@ -491,13 +567,6 @@ Now, translate this text:
             
             # Direct translation prompt that asks for just the translation
             prompt = f"""
-
-    def conversation(self, message):
-        if not self.connection:
-            raise ConnectionError("Server disconnected")
-        if not message:
-            return "No message received"
-        prompt = f"""
 You are a translator from English to Spanish.
 Respond only in valid JSON with exactly one key: "translation".
 No extra text, no code blocks, no commentary.
@@ -507,10 +576,6 @@ Now, translate this text:
 "{text}"
             """
             
-            response = self.model.generate_content(prompt)
-"{message}"
-        """
-        try:
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=prompt,
@@ -519,7 +584,7 @@ Now, translate this text:
                     temperature=0.7,
                     top_p=0.9,
                     top_k=50)
-)
+            )
             raw_output = response.text.strip()
             logging.info("Gemini raw output:\n%s", raw_output)
             
@@ -559,8 +624,7 @@ Now, translate this text:
         except Exception as e:
             logging.error(f"Gemini error: {e}")
             return "Translation error."
-
-
+            
     async def text_to_speech(self, text):
         """Generate speech from text using a TTS service"""
         try:
@@ -569,6 +633,7 @@ Now, translate this text:
         except Exception as e:
             logging.error(f"TTS error: {e}")
             return b""  # Return empty bytes
+
 # Create a global model instance
 model = None
 if GEMINI_API_KEY:
