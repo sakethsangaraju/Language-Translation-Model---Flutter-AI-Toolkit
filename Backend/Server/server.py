@@ -26,7 +26,8 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # logging with more details for debugging
 logging.basicConfig(
@@ -47,6 +48,7 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+
 # Maximum content length (10MB)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -66,6 +68,12 @@ else:
 
 # Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
+
+# API key in environment variable
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # We'll create a global model instance after the TranslationModel class is defined
 
@@ -367,6 +375,7 @@ def serve_uploads(filename):
     """Serve uploaded files"""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+
 class TranslationModel:
     def __init__(self):
         api_key = os.environ.get('GEMINI_API_KEY')
@@ -388,6 +397,29 @@ class TranslationModel:
             generation_config={"temperature": 0.0, "max_output_tokens": 1024}
         )
 
+@app.route('/test_translation', methods=['POST'])
+def test_translation():
+    data = request.get_json()
+    if not data or 'text' not in data:
+        return jsonify({'error': 'No text provided'}), 400
+    text = data['text']
+    logging.info("Test translation request: %s", text)
+    try:
+        translation = gemini_instance.conversation(text)
+        return jsonify({
+            'original': text,
+            'translation': translation
+        })
+    except Exception as e:
+        logging.error("Translation test error: %s", e)
+        return jsonify({'error': f'Translation failed: {str(e)}'}), 500
+
+# ----------------- Gemini Translation -----------------
+class Gemini:
+    def __init__(self, model='gemini-2.0-flash'):
+        self.client = client
+        self.model = model
+        self.connection = True
     def conversation(self, text):
         try:
             import re  # Import re at the top level of the function
@@ -458,6 +490,13 @@ Now, translate this text:
             
             # Direct translation prompt that asks for just the translation
             prompt = f"""
+
+    def conversation(self, message):
+        if not self.connection:
+            raise ConnectionError("Server disconnected")
+        if not message:
+            return "No message received"
+        prompt = f"""
 You are a translator from English to Spanish.
 Respond only in valid JSON with exactly one key: "translation".
 No extra text, no code blocks, no commentary.
@@ -468,6 +507,18 @@ Now, translate this text:
             """
             
             response = self.model.generate_content(prompt)
+"{message}"
+        """
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=512,
+                    temperature=0.7,
+                    top_p=0.9,
+                    top_k=50)
+)
             raw_output = response.text.strip()
             logging.info("Gemini raw output:\n%s", raw_output)
             
@@ -507,6 +558,7 @@ Now, translate this text:
         except Exception as e:
             logging.error(f"Gemini error: {e}")
             return "Translation error."
+
 
     async def text_to_speech(self, text):
         """Generate speech from text using a TTS service"""
@@ -640,7 +692,7 @@ def resample_audio(audio_bytes, from_rate=48000, to_rate=16000):
     except Exception as e:
         logging.error(f"Error resampling audio: {e}")
     return audio_bytes
-
+gemini_instance = Gemini(model='gemini-2.0-flash')
 # ----------------- WebSocket Handlers -----------------
 
 @socketio.on('connect')
@@ -683,3 +735,4 @@ if __name__ == '__main__':
         logging.info("Server stopped by user")
     except Exception as e:
         logging.error(f"Server error: {e}", exc_info=True)
+    socketio.run(app, host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
