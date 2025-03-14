@@ -743,4 +743,87 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
     _socket.dispose();
     super.dispose();
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8.0),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  
+                  Text("Audio Recording"),
+                  SizedBox(height: 8),
+
+                  // Toggle Switch 
+                  Row(
+                    children: [
+                      Text("Use WebRTC: "),
+                      Switch(
+                        value: _useWebRTC,
+                        onChanged: _toggleWebRTC,
+                      ),
+                    ],
+                  ),
+                  Text(
+                    "Status: ${_useWebRTC ? (_isWebRTCConnected ? 'Connected' : 'Connecting...') : 'Not using WebRTC'}",
+                  ),
+
+                  SizedBox(height: 8),
+
+                  // Start/Stop Recording Button
+                  if (_useWebRTC)
+                    ElevatedButton(
+                      onPressed:
+                          _isWebRTCConnected ? _toggleWebRTCRecording : null,
+                      child: Text(
+                          _isRecording ? "Stop Speaking" : "Start Speaking"),
+                    ),
+
+                  // Play Raw Audio button
+                  if (_useWebRTC && !_isRecording && _rawAudioData != null) ...[
+                    SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: !_isPlaying ? _playRawRecording : null,
+                      child: Text("Play Raw Recording"),
+                    ),
+                    Text(
+                        "Raw recording size: ${_rawAudioData?.length ?? 0} bytes"),
+                  ],
+
+                  if (_useWebRTC && _translatedText != null) ...[
+                    SizedBox(height: 8),
+                    Text("Translation: $_translatedText"),
+                  ],
+
+                  if (_error != null) ...[
+                    SizedBox(height: 8),
+                    Text("Error: $_error"),
+                  ],
+                ],
+              ),
+            ),
+
+            // Only show original UI if not in WebRTC mode
+            if (!_useWebRTC) ...[
+              SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: Text("WebSocket mode not currently in use"),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
