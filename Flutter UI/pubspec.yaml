@@ -20,7 +20,7 @@ dependencies:
   path_provider: ^2.1.5
   record: ^5.2.1
   just_audio: ^0.9.46
-  
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
