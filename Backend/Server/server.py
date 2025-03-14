@@ -470,6 +470,7 @@ Now, translate this text:
             
             # Remove quotation marks if present
             response_text = response_text.strip('"\'')
+            
             return response_text.strip()
         except Exception as e:
             logging.error(f"Gemini error: {e}")
@@ -568,7 +569,6 @@ Now, translate this text:
         except Exception as e:
             logging.error(f"TTS error: {e}")
             return b""  # Return empty bytes
-
 # Create a global model instance
 model = None
 if GEMINI_API_KEY:
@@ -692,40 +692,430 @@ def resample_audio(audio_bytes, from_rate=48000, to_rate=16000):
     except Exception as e:
         logging.error(f"Error resampling audio: {e}")
     return audio_bytes
-gemini_instance = Gemini(model='gemini-2.0-flash')
-# ----------------- WebSocket Handlers -----------------
 
-@socketio.on('connect')
-def handle_connect():
-    logging.info("Client connected")
-    emit('connected', {'data': 'Connected to server'})
-
-@socketio.on('translate')
-def handle_translate(data):
-    text = data.get('text', '')
-    session_id = data.get('sessionId', '')
-    if not text:
-        emit('translation_final', {'sessionId': session_id, 'data': "No message received"})
-        return
-    translation = gemini_instance.conversation(text)
-    emit('translation_final', {'sessionId': session_id, 'data': translation})
-
-@socketio.on('audio_stream')
-def handle_audio_stream(data):
-    sessionId = data.get('sessionId', 'unknown')
-    audio_b64 = data.get('data', '')
+async def process_and_respond(session_id, audio_data, channel):
+    """Process audio data, transcribe, translate, and send response"""
     try:
-        audio_bytes = base64.b64decode(audio_b64)
-        chunk_length = len(audio_bytes)
-        logging.info("Received audio stream chunk from session %s, data length: %d bytes", sessionId, chunk_length)
+        logging.info(f"[{session_id}] Processing audio segment of {len(audio_data)} bytes")
+        
+        # Check if we're in test mode (no valid API key)
+        if TEST_MODE:
+            logging.info(f"[{session_id}] TEST MODE - Skipping transcription and translation")
+            
+            try:
+                # Generate a test tone using gTTS
+                from gtts import gTTS
+                from io import BytesIO
+                
+                test_message = "This is a test. El servidor está funcionando en modo de prueba."
+                logging.info(f"[{session_id}] Generating test TTS message")
+                
+                tts = gTTS(text=test_message, lang='es')
+                buf = BytesIO()
+                tts.write_to_fp(buf)
+                buf.seek(0)
+                
+                # Send test audio back to the client
+                audio_b64 = base64.b64encode(buf.read()).decode('utf-8')
+                await channel.emit('translation_result', {
+                    'sessionId': session_id,
+                    'english_text': 'This is a test.',
+                    'spanish_text': 'El servidor está funcionando en modo de prueba.',
+                    'audio': audio_b64
+                })
+                return
+            except Exception as e:
+                logging.error(f"[{session_id}] Error generating test message: {e}")
+                # Fall through to sending a simple response
+                await channel.emit('translation_result', {
+                    'sessionId': session_id,
+                    'english_text': 'Test mode active',
+                    'spanish_text': 'Modo de prueba activo',
+                    'audio': ''
+                })
+                return
+                
+        # Regular processing with Gemini API below
+        # Transcribe audio to English text
+        eng_text = await model.transcribe_audio(audio_data)
+        logging.info(f"[{session_id}] STT -> {eng_text}")
+        
+        if not eng_text or eng_text == "No speech detected" or eng_text == "Failed to transcribe audio" or eng_text == "Audio too short":
+            logging.warning(f"[{session_id}] No valid transcription, skipping translation")
+            if channel.readyState == "open":
+                channel.send(json.dumps({
+                    "english_text":"No speech detected",
+                    "spanish_text":"No se detectó voz",
+                    "error": "No valid transcription"
+                }))
+            return
+        
+        # English text to Spanish traNSLATION
+        spa_text = model.translate(eng_text)
+        logging.info(f"[{session_id}] Trans -> {spa_text}")
+        # Convert Spanish text to speech
+        logging.info(f"[{session_id}] Generating TTS for: {spa_text}")
+        tts_b64 = await model.text_to_speech(spa_text)
+        if tts_b64:
+            logging.info(f"[{session_id}] Successfully generated TTS (base64 length: {len(tts_b64)})")
+        else:
+            logging.warning(f"[{session_id}] Failed to generate TTS")
+        if channel.readyState == "open":
+            # Send response back to client
+            msg = json.dumps({
+                "audio": tts_b64,
+                "english_text": eng_text,
+                "spanish_text": spa_text
+            })
+            logging.info(f"[{session_id}] Sending response with audio: {bool(tts_b64)}")
+            channel.send(msg)
+            logging.info(f"[{session_id}] Sent TTS over datachannel")
+        else:
+            logging.error(f"[{session_id}] Data channel not open, cannot send response")
     except Exception as e:
-        logging.error("Error decoding audio data for session %s: %s", sessionId, e)
-        return
-    emit('audio_ack', {'sessionId': sessionId, 'message': f'Audio chunk received, length: {chunk_length} bytes'})
+        logging.error(f"Error in process_and_respond: {e}", exc_info=True)
+        if channel and channel.readyState == "open":
+            channel.send(json.dumps({
+                "error": str(e),
+                "english_text": "Error processing audio",
+                "spanish_text": "Error al procesar el audio"
+            }))
 
-@app.route('/', methods=['GET'])
-def index():
-    return '<h2>Server is running! Use /echo, /upload, /test_translation, or connect via WebSocket.</h2>'
+@app.route('/offer', methods=['POST'])
+async def offer():
+    """Handle WebRTC offer from client"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No SDP provided'}), 400
+
+    try:
+        # Parse the SDP offer
+        offer = RTCSessionDescription( # type: ignore
+            sdp=data['sdp'],
+            type=data['type']
+        )
+
+        logging.info(f"Received SDP offer")
+
+        # Create peer connection with network options
+        config = RTCConfiguration( # type: ignore
+            iceServers=[
+                RTCIceServer(urls=[ # type: ignore
+                    "stun:stun.l.google.com:19302",
+                    "stun:stun1.l.google.com:19302",
+                ]),
+                # Add a free TURN server (limited bandwidth but should help for testing)
+                RTCIceServer( # type: ignore
+                    urls=["turn:turn.stanfy.com:3478"],
+                    username="test",
+                    credential="test"
+                )
+            ],
+        )
+        # Create a new peer connection
+        pc = RTCPeerConnection(configuration=config) # type: ignore
+        # Force IPv4 usage specifically for browser testing
+        pc._host_candidates = ["127.0.0.1"] 
+
+        # Enhance logging for connection establishment
+        logging.info("WebRTC peer connection created with config: %s", config)
+        logging.info("Using forced host candidates: %s", pc._host_candidates)
+
+        # Generate unique session ID
+        session_id = f"webrtc-{int(time.time())}"
+        logging.info(f"Creating new WebRTC session: {session_id}")
+        
+        # Initialize VAD processor
+        vad_proc = VADProcessor(session_id)
+        channel_ref = None
+        
+        # Handle data channel creation
+        @pc.on("datachannel")
+        def on_datachannel(channel):
+            nonlocal channel_ref
+            logging.info(f"[{session_id}] Data channel established: {channel.label}")
+            channel_ref = channel
+            
+            @channel.on("message")
+            def on_message(message):
+                logging.info(f"[{session_id}] Received message on datachannel: {message}")
+        
+        # Create custom audio track that processes audio with VAD
+        class VADTrack(MediaStreamTrack): # type: ignore
+            kind = "audio"
+            async def recv(self):
+                frame = await super().recv()
+                audio_bytes = frame.to_ndarray().tobytes()
+                audio_bytes = resample_audio(audio_bytes, 48000, 16000)
+                done, segment = vad_proc.process_audio(audio_bytes)
+                if done and segment and channel_ref:
+                    # Process detected speech segment
+                    logging.info(f"[{session_id}] Speech segment detected, length: {len(segment)} bytes")
+                    asyncio.create_task(process_and_respond(session_id, segment, channel_ref)) # type: ignore
+                return frame
+
+        # Handle incoming media tracks
+        @pc.on("track")
+        def on_track(track):
+            logging.info(f"[{session_id}] Track received: {track.kind}")
+            if track.kind == "audio":
+                logging.info(f"[{session_id}] Adding VAD track in response to audio track")
+                pc.addTrack(VADTrack())
+
+        # Monitor ICE connection state changes
+        @pc.on("iceconnectionstatechange")
+        def on_ice():
+            state = pc.iceConnectionState
+            logging.info(f"[{session_id}] ICE connection state changed: {state}")
+            
+            if state == "connected":
+                logging.info(f"[{session_id}] WebRTC connected successfully!")
+            elif state == "failed":
+                logging.error(f"[{session_id}] WebRTC connection failed")
+                # Log detailed information about candidates for debugging
+                try:
+                    candidates = pc.getLocalCandidates()
+                    logging.info(f"[{session_id}] Local candidates: {[c.sdpMLineIndex for c in candidates]}")
+                    logging.info(f"[{session_id}] Using host candidates: {pc._host_candidates}")
+                except Exception as e:
+                    logging.error(f"Error getting local candidates: {e}")
+
+        # Add ICE candidate handlers for detailed debugging
+        @pc.on("icecandidateerror") 
+        def on_ice_error(error):
+            logging.error(f"[{session_id}] ICE candidate error: {error}")
+            
+        # Log all gathered ICE candidates
+        def on_candidate_success(candidate):
+            logging.info(f"[{session_id}] ICE candidate gathered: {candidate.candidate}")
+            
+        pc.on("icecandidate", on_candidate_success)
+
+        # Set the remote description from the offer
+        logging.info(f"[{session_id}] Setting remote description (offer)")
+        await pc.setRemoteDescription(offer)
+        
+        # Create an answer
+        answer = await pc.createAnswer()
+        logging.info(f"[{session_id}] Created answer, setting local description")
+        await pc.setLocalDescription(answer)
+
+        # Monitor ICE gathering progress
+        @pc.on("icegatheringstatechange")
+        def on_ice_gathering():
+            state = pc.iceGatheringState
+            logging.info(f"[{session_id}] ICE gathering state changed: {state}")
+
+        # Wait for server to finish ICE gathering
+        ice_gather_start = time.time()
+        ice_gathering_complete = False
+        while not ice_gathering_complete:
+            if pc.iceGatheringState == "complete":
+                ice_gathering_complete = True
+                logging.info(f"[{session_id}] ICE gathering completed")
+            elif time.time() - ice_gather_start > 5:  # 5 second timeout
+                logging.warning(f"[{session_id}] ICE gathering timed out, proceeding with available candidates")
+                break
+            else:
+                await asyncio.sleep(0.1) # type: ignore
+
+        logging.info(f"[{session_id}] Sending SDP answer to client")
+        
+        # Make sure we have the final SDP with all candidates
+        answer_dict = {
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type
+        }
+        logging.debug(f"[{session_id}] SDP answer: {answer_dict}")
+
+        # Return the SDP answer
+        return jsonify(answer_dict)
+    except Exception as e:
+        logging.error(f"Offer error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+# ----------------- WebSocket Handlers -----------------
+@socketio.on('audio_chunk')
+def handle_audio_chunk(data):
+    try:
+        # Extract data from the request
+        session_id = data.get('sessionId', 'unknown')
+        base64_audio = data.get('audio', '')
+        
+        logging.info(f"[{session_id}] Received audio chunk: {len(base64_audio)} bytes")
+        
+        # Ensure base64 is properly padded before decoding
+        while len(base64_audio) % 4 != 0:
+            base64_audio += '='
+        
+        try:
+            # Decode the base64 audio data
+            audio_bytes = base64.b64decode(base64_audio)
+        except Exception as e:
+            logging.error(f"[{session_id}] Error decoding audio: {e}")
+            emit('audio_error', {
+                'sessionId': session_id,
+                'error': f"Failed to decode audio: {str(e)}",
+                'english_text': 'Audio encoding error',
+                'spanish_text': 'Error de codificación de audio'
+            })
+            return
+        
+        # Sanity check - if audio is too small, likely not valid
+        if len(audio_bytes) < 1000:  # More realistic threshold (1KB)
+            logging.warning(f"[{session_id}] Audio chunk too small ({len(audio_bytes)} bytes), may not contain valid audio")
+            emit('audio_error', {
+                'sessionId': session_id,
+                'error': 'Audio too small or invalid',
+                'english_text': 'No valid audio detected',
+                'spanish_text': 'No se detectó audio válido'
+            })
+            return
+        
+        # Process the audio synchronously instead of using asyncio
+        # Save the audio segment to a temporary file in WAV format
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+            temp_file.write(audio_bytes)
+            temp_file_path = temp_file.name
+        
+        # Log the file size for debugging
+        logging.info(f"Saved audio segment to {temp_file_path} ({len(audio_bytes)} bytes)")
+        
+        # Step 1: Transcribe the audio to text
+        try:
+            english_text = transcribe_audio(temp_file_path)
+            if not english_text:
+                logging.warning(f"[{session_id}] No transcription result")
+                socketio.emit('audio_error', {
+                    'sessionId': session_id,
+                    'error': 'Could not transcribe audio',
+                    'english_text': 'No speech detected',
+                    'spanish_text': 'No se detectó voz'
+                })
+                os.unlink(temp_file_path)  # Clean up the temp file
+                return
+            
+            logging.info(f"Transcribed text: {english_text}")
+            logging.info(f"[{session_id}] STT -> {english_text}")
+            
+            # Step 2: Translate the text from English to Spanish
+            spanish_text = model.translate(english_text)
+            if not spanish_text or spanish_text == "Translation error.":
+                logging.warning(f"[{session_id}] Translation failed")
+                socketio.emit('audio_error', {
+                    'sessionId': session_id,
+                    'error': 'Translation failed',
+                    'english_text': english_text,
+                    'spanish_text': 'Error de traducción'
+                })
+                os.unlink(temp_file_path)  # Clean up the temp file
+                return
+            
+            logging.info(f"[{session_id}] Trans -> {spanish_text}")
+            
+            # Step 3: Generate TTS for the Spanish text
+            logging.info(f"[{session_id}] Generating TTS for: {spanish_text}")
+            
+            # Use gTTS 
+            try:
+                from gtts import gTTS
+                from io import BytesIO
+                
+                tts = gTTS(text=spanish_text, lang='es')
+                buf = BytesIO()
+                tts.write_to_fp(buf)
+                buf.seek(0)
+                audio_data = buf.read()
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                logging.info(f"Using gTTS to synthesize: {spanish_text}")
+                logging.info(f"TTS successful, generated {len(audio_data)} bytes of audio (MP3)")
+            except Exception as e:
+                logging.error(f"Error using gTTS: {e}")
+                socketio.emit('audio_error', {
+                    'sessionId': session_id,
+                    'error': 'TTS generation failed',
+                    'english_text': english_text,
+                    'spanish_text': spanish_text
+                })
+                os.unlink(temp_file_path)  # Clean up the temp file
+                return
+            
+            # Success - send the result via WebSocket
+            logging.info(f"[{session_id}] Successfully generated TTS (base64 length: {len(audio_base64)})")
+            socketio.emit('translation_result', {
+                'sessionId': session_id,
+                'english_text': english_text,
+                'spanish_text': spanish_text,
+                'audio': audio_base64
+            })
+            
+            # Clean up the temp file
+            os.unlink(temp_file_path)
+            
+        except Exception as e:
+            logging.error(f"[{session_id}] Error processing audio: {e}", exc_info=True)
+            socketio.emit('audio_error', {
+                'sessionId': session_id,
+                'error': str(e),
+                'english_text': 'Server processing error',
+                'spanish_text': 'Error de procesamiento del servidor'
+            })
+            # Try to clean up the temp file if it exists
+            try:
+                if 'temp_file_path' in locals():
+                    os.unlink(temp_file_path)
+            except:
+                pass
+    
+    except Exception as e:
+        logging.error(f"Error handling audio chunk: {e}")
+        emit('audio_error', {
+            'sessionId': session_id if 'session_id' in locals() else 'unknown',
+            'error': str(e),
+            'english_text': 'Server error',
+            'spanish_text': 'Error del servidor'
+        })
+
+def transcribe_audio(audio_path):
+    """
+    Transcribe audio to text using Whisper or other methods
+    """
+    # For accurate transcription of short phrases, SpeechRecognition might be better
+    try:
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(audio_path) as source:
+            audio_data = recognizer.record(source)
+            try:
+                # Try Google first for better accuracy with short phrases
+                text = recognizer.recognize_google(audio_data)
+                logging.info(f"Transcribed with Google: {text}")
+                return text.strip()
+            except Exception as e:
+                logging.warning(f"Google Speech Recognition error: {e}")
+                # Fall back to Whisper
+                pass
+    except Exception as e:
+        logging.warning(f"SpeechRecognition failed: {e}")
+    
+    # Fall back to Whisper if SpeechRecognition fails
+    try:
+        import whisper
+        try:
+            model = whisper.load_model("base")
+            # Use shorter audio decoding options for better accuracy with short clips
+            result = model.transcribe(
+                audio_path, 
+                temperature=0.0,  # Lower temperature for more deterministic results
+                initial_prompt="A brief voice message in English"  # Help guide the model
+            )
+            return result["text"].strip()
+        except Exception as e:
+            logging.error(f"Whisper error: {e}")
+            return None
+    except ImportError:
+        logging.error("Neither SpeechRecognition nor Whisper available")
+        return None
 
 if __name__ == '__main__':
     logging.info(f"Starting server on port {PORT}")
@@ -734,5 +1124,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logging.info("Server stopped by user")
     except Exception as e:
-        logging.error(f"Server error: {e}", exc_info=True)
-    socketio.run(app, host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+        logging.error(f"Server error: {e}", exc_info=True) 

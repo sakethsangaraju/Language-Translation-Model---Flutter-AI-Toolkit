@@ -41,7 +41,7 @@ linux/flutter/ephemeral/
 windows/flutter/generated_plugin_registrant.*
 
 # Uploaded images (if not required to be tracked)
-uploads/
+Server/uploads/
 
 # Ignore environment variables
 .env
