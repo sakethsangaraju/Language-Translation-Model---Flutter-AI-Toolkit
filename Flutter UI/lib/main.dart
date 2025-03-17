@@ -415,6 +415,9 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
   bool _isWebRTCConnected = false;
   final WebRTCHelper _webRTCHelper = WebRTCHelper();
 
+  // Add a field to store last successful processed audio
+  String? _lastProcessedAudio;
+
   @override
   void initState() {
     super.initState();
@@ -628,6 +631,21 @@ class _AudioStreamWidgetState extends State<AudioStreamWidget> {
         _isConnected = false;
         _status = "Disconnected";
       });
+    });
+
+    // In the setupEventListeners method, store processed audio
+    widget.socket.on('webrtc_translation', (data) {
+      logger.i('Received translation result: ${data['spanish_text']}');
+
+      bool isProcessed = data['is_processed'] == true;
+      if (isProcessed) {
+        logger.i('Received Gemini processed audio');
+        _lastProcessedAudio = data['audio'];
+      } else {
+        logger.w('Received unprocessed audio (fallback)');
+      }
+
+      // Rest of your existing code...
     });
   }
 
