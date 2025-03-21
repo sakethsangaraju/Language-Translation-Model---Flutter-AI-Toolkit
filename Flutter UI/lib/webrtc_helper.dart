@@ -26,6 +26,8 @@ class WebRTCHelper {
   List<html.Blob> _audioChunks = [];
   // Raw audio data for direct playback
   Uint8List? rawAudioData;
+  // WebRTC connection
+  RTCPeerConnection? _peerConnection;
   // Callbacks
   Function(String)? onTranscription;
   Function(String)? onTranslation;
@@ -50,9 +52,18 @@ class WebRTCHelper {
 
   // Set up socket.io event listeners
   void _setupEventListeners() {
-    _socket?.on('webrtc_answer', (data) {
+    _socket?.on('webrtc_answer', (data) async {
       logger.i('Received WebRTC answer from server');
-      _isConnected = true;
+
+      try {
+        // Handle server's answer by setting the remote description
+        final answer = RTCSessionDescription(data['sdp'], data['type']);
+        await _peerConnection?.setRemoteDescription(answer);
+        logger.i('Remote description set from answer');
+        _isConnected = true;
+      } catch (e) {
+        logger.e('Error setting remote description: $e');
+      }
     });
 
     _socket?.on('webrtc_ice_ack', (data) {
@@ -89,18 +100,67 @@ class WebRTCHelper {
       }
     });
   }
-  // Start a WebRTC-like call
+
+  // Start a WebRTC call
   Future<bool> startCall() async {
     if (!_isInitialized) {
       logger.e('WebRTC helper not initialized');
       return false;
     }
     try {
-      // Get user media permission (but we won't use actual WebRTC)
-      _localStream = await navigator.mediaDevices
-          .getUserMedia({'audio': true, 'video': false});
+      // Configure RTCPeerConnection with STUN server
+      final configuration = {
+        'iceServers': [
+          {'urls': 'stun:stun.l.google.com:19302'}
+        ]
+      };
 
-      // For web, get the native media stream
+      // Create peer connection with STUN server
+      _peerConnection = await createPeerConnection(configuration);
+
+      // Add ICE connection state change listener
+      _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
+        logger.i('ICE connection state changed: $state');
+        if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+          // Insert fallback logic here (e.g., emit a fallback event or call a fallback method)
+          logger.w('ICE connection failed - initiating fallback mechanism');
+          // (Optionally, set a flag or invoke a callback: onError?.call('Connection failed, using Socket.IO fallback');)
+        }
+      };
+
+      // Set up remote track handling
+      _peerConnection?.onTrack = (RTCTrackEvent event) {
+        if (event.track.kind == 'audio') {
+          logger.i('Got remote audio track from server');
+          // The browser will automatically play the audio since we have an audio track
+          // No need to explicitly set up an audio renderer
+        }
+      };
+
+      // Alternative handler for older implementations
+      _peerConnection?.onAddStream = (MediaStream stream) {
+        logger.i('Got remote stream from server');
+        // The audio will play automatically in the browser
+      };
+
+      // Get user media permission
+      final mediaConstraints = {
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true
+        },
+        'video': false
+      };
+      _localStream =
+          await navigator.mediaDevices.getUserMedia(mediaConstraints);
+
+      // Add local audio tracks to peer connection
+      _localStream?.getTracks().forEach((track) {
+        _peerConnection?.addTrack(track, _localStream!);
+      });
+
+      // For web, get the native media stream for recording
       if (_localStream != null) {
         // Get the native media stream for recording - use dynamic to safely access jsStream
         dynamic nativeStream = _localStream;
@@ -111,28 +171,58 @@ class WebRTCHelper {
         }
       }
 
-      // Send a fake offer to the server to initiate the connection               https://github.com/httptoolkit/mockrtc
-      _socket?.emit('webrtc_offer', {
-        'type': 'offer',               
-        'sdp':
-            'v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=msid-semantic:WMS *\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nc=IN IP4 0.0.0.0\r\na=rtpmap:111 opus/48000/2\r\na=setup:actpass\r\na=mid:0\r\na=sendrecv\r\n'
+      // Listen for local ICE candidates to send them to the server
+      _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+        logger.i('Generated ICE candidate: ${candidate.candidate}');
+        _socket?.emit('webrtc_ice_candidate', {
+          'candidate': candidate.candidate,
+          'sdpMid': candidate.sdpMid,
+          'sdpMLineIndex': candidate.sdpMLineIndex
+        });
+      };
+
+      // Create an offer with offerToReceiveAudio option
+      RTCSessionDescription offer =
+          await _peerConnection!.createOffer({'offerToReceiveAudio': true});
+
+      // Set local description
+      await _peerConnection!.setLocalDescription(offer);
+
+      // Send the offer to the server
+      _socket?.emit('webrtc_offer', {'type': offer.type, 'sdp': offer.sdp});
+
+      // Start a timer for fallback logic
+      Timer(Duration(seconds: 10), () {
+        if (!_isConnected) {
+          logger.w('WebRTC connection timed out, falling back to Socket.IO');
+          // Invoke fallback mechanism
+          fallbackToSocketIO();
+        }
       });
 
-      // Send a fake ICE candidate
-      _socket?.emit('webrtc_ice_candidate', {
-        'candidate':
-            'candidate:0 1 UDP 2122252543 192.168.1.100 12345 typ host',
-        'sdpMid': '0',
-        'sdpMLineIndex': 0
+      // Set up handler for remote ICE candidates
+      _socket?.on('webrtc_ice_candidate', (candidateData) async {
+        try {
+          final candidate = RTCIceCandidate(
+            candidateData['candidate'],
+            candidateData['sdpMid'],
+            candidateData['sdpMLineIndex'],
+          );
+          await _peerConnection?.addCandidate(candidate);
+          logger.i('Added remote ICE candidate');
+        } catch (e) {
+          logger.e('Error adding ICE candidate: $e');
+        }
       });
 
-      logger.i('WebRTC-like call initiated');
+      logger.i('WebRTC call initiated');
       return true;
     } catch (e) {
-      logger.e('Error starting WebRTC-like call: $e');
+      logger.e('Error starting WebRTC call: $e');
       return false;
     }
   }
+
   // End the call
   Future<void> endCall() async {
     if (_isRecording) {
@@ -140,12 +230,15 @@ class WebRTCHelper {
     }
 
     _localStream?.getTracks().forEach((track) => track.stop());
+    await _peerConnection?.close();
+    _peerConnection = null;
     _localStream = null;
     _webStream = null;
     _isConnected = false;
 
-    logger.i('WebRTC-like call ended');
+    logger.i('WebRTC call ended');
   }
+
   // Start recording and streaming audio
   Future<void> startRecording() async {
     if (_isRecording) return;
@@ -176,6 +269,7 @@ class WebRTCHelper {
       logger.e('Error starting audio recording: $e');
     }
   }
+
   Future<void> stopRecording() async {
     if (!_isRecording || _webRecorder == null) return;
 
@@ -197,6 +291,7 @@ class WebRTCHelper {
       logger.e('Error stopping audio recording: $e');
     }
   }
+
   // Process audio chunks
   Future<void> _processAudioChunks() async {
     if (_audioChunks.isEmpty) {
@@ -238,8 +333,28 @@ class WebRTCHelper {
       logger.e('Error processing audio chunks: $e');
     }
   }
+
   // Public getters
   bool get isConnected => _isConnected;
   bool get isRecording => _isRecording;
   MediaStream? get localStream => _localStream;
+
+  // Fallback mechanism when WebRTC fails
+  void fallbackToSocketIO() {
+    logger.i('Initiating Socket.IO fallback for audio transfer');
+
+    // Notify the app about fallback
+    if (onError != null) {
+      onError!('WebRTC connection failed, using Socket.IO fallback');
+    }
+
+    // Clean up WebRTC resources
+    _peerConnection?.close();
+
+    // Fallback flag - app can check this to know we're in fallback mode
+    _isConnected = false;
+
+    // Continue with Socket.IO based communication
+    // The app will use the regular Socket.IO mechanisms for audio transfer
+  }
 }

@@ -20,6 +20,15 @@ import queue
 import numpy as np
 import struct
 import concurrent.futures
+import asyncio
+from fractions import Fraction
+import av
+from collections import deque
+
+# Import aiortc components
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCConfiguration, RTCIceServer
+from aiortc.contrib.media import MediaStreamTrack, MediaBlackhole
+from aiortc.mediastreams import MediaStreamError, AudioStreamTrack
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -55,6 +64,10 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Store WebRTC client sessions
 webrtc_clients = {}
+# Store active WebRTC peer connections
+webrtc_peer_connections = {}
+# Store TTS audio queues for each session
+tts_audio_queues = {}
 
 # --- Configure Gemini ---
 # Get API key from environment variables
@@ -97,29 +110,202 @@ audio_processing_queue = queue.Queue()# Audio processing queue for WebRTC
 # Handle WebRTC offer
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
-    """Handle WebRTC offers from clients (simplified version)"""
+    """Handle WebRTC offers from clients using aiortc"""
     client_id = request.sid
     logging.info(f"Received WebRTC offer from {client_id}")
     
-    # We're using a simplified approach here that doesn't require the aiortc library for now 
-    # Just acknowledge the offer with a dummy answer 
-    emit('webrtc_answer', {
-        'type': 'answer',
-    })
-    logging.info(f"Sent WebRTC answer to {client_id}")
+    try:
+        # Parse the SDP offer
+        offer_data = data.get('sdp')
+        offer_type = data.get('type')
+        if not offer_data or not offer_type:
+            logging.error(f"Invalid WebRTC offer from {client_id}: missing sdp or type")
+            emit('webrtc_error', {'error': 'Invalid offer: missing sdp or type'})
+            return
+            
+        offer = RTCSessionDescription(sdp=offer_data, type=offer_type)
+        
+        # Create peer connection with STUN/TURN servers
+        config = RTCConfiguration(
+            iceServers=[
+                RTCIceServer(
+                    urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+                ),
+                RTCIceServer(
+                    urls=["turn:turn.stanfy.com:3478"],
+                    username="test",
+                    credential="test"
+                )
+            ]
+        )
+        
+        # Create a new peer connection
+        pc = RTCPeerConnection(configuration=config)
+        
+        # Generate unique session ID
+        session_id = f"webrtc-{int(time.time())}"
+        
+        # IMPORTANT: Store the peer connection immediately after creation
+        # to ensure it's available for incoming ICE candidates
+        current_time = time.time()
+        logging.info(f"[{session_id}] [{current_time}] Storing RTCPeerConnection for client {client_id} immediately after creation")
+        webrtc_peer_connections[client_id] = {
+            'pc': pc,
+            'session_id': session_id,
+            'active': True,
+            'created_at': current_time
+        }
+        
+        logging.info(f"[{session_id}] Creating new WebRTC session for client {client_id}")
+        
+        # Create and add a Gemini audio track to send TTS back to client
+        gemini_track = GeminiAudioTrack(session_id)
+        pc.addTrack(gemini_track)
+        
+        # Update the peer connection info with the track
+        webrtc_peer_connections[client_id]['track'] = gemini_track
+        
+        # Set up ICE candidate event handler
+        @pc.on("icecandidate")
+        def on_ice_candidate(candidate):
+            logging.info(f"[{session_id}] New ICE candidate: {candidate.sdpMid}")
+            # Send the ICE candidate to the client
+            emit('webrtc_ice_candidate', {
+                'candidate': candidate.candidate,
+                'sdpMid': candidate.sdpMid,
+                'sdpMLineIndex': candidate.sdpMLineIndex
+            })
+        
+        # Log ICE connection state changes
+        @pc.on("iceconnectionstatechange")
+        def on_ice_connection_state_change():
+            logging.info(f"[{session_id}] ICE connection state changed to: {pc.iceConnectionState}")
+            conn_data = webrtc_peer_connections.get(client_id)
+            if conn_data:
+                conn_data['ice_state'] = pc.iceConnectionState
+                
+                # Mark connection as inactive if failed/disconnected
+                if pc.iceConnectionState in ["failed", "closed", "disconnected"]:
+                    conn_data['active'] = False
+                    logging.warning(f"[{session_id}] WebRTC connection is no longer active")
+                elif pc.iceConnectionState == "connected":
+                    conn_data['active'] = True
+                    logging.info(f"[{session_id}] WebRTC connection established")
+        
+        # Handle track events - this is mainly for debugging since we don't expect
+        # to receive tracks from the client, just send our TTS track
+        @pc.on("track")
+        def on_track(track):
+            logging.info(f"[{session_id}] Received track: {track.kind}")
+            
+            # Just to be safe, don't send the events to nowhere
+            @track.on("ended")
+            async def on_ended():
+                logging.info(f"[{session_id}] Track ended")
+        
+        # Set remote description from the offer
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def process_offer():
+            # Set the remote description from the offer
+            await pc.setRemoteDescription(offer)
+            
+            # Create an answer
+            answer = await pc.createAnswer()
+            
+            # Set local description from the answer
+            await pc.setLocalDescription(answer)
+            
+            # Send the answer back to the client
+            emit('webrtc_answer', {
+                'sdp': pc.localDescription.sdp,
+                'type': pc.localDescription.type
+            })
+            logging.info(f"[{session_id}] Sent WebRTC answer to client {client_id}")
+            
+        # Run the async code
+        future = asyncio.run_coroutine_threadsafe(process_offer(), loop)
+        future.result(timeout=10)  # Wait for at most 10 seconds
+        
+        # Store client ID for ICE candidates - mark as active WebRTC client
+        webrtc_clients[client_id] = {
+            'session_id': session_id,
+            'webrtc_active': True
+        }
+        
+        logging.info(f"[{session_id}] WebRTC offer handling completed for client {client_id}")
     
-    # Store client ID for ICE candidates
-    webrtc_clients[client_id] = True
+    except Exception as e:
+        logging.error(f"Error handling WebRTC offer: {e}", exc_info=True)
+        emit('webrtc_error', {'error': f'WebRTC negotiation failed: {str(e)}'})
+        # Make sure we still have a way to communicate with the client
+        webrtc_clients[client_id] = {
+            'webrtc_active': False
+        }
 
 # Handle ICE candidates
-@socketio.on('webrtc_ice')
+@socketio.on('webrtc_ice_candidate')
 def handle_ice_candidate(data):
+    """Handle ICE candidates from clients"""
     client_id = request.sid
-    logging.info(f"Received ICE candidate from {client_id}")
+    current_time = time.time()
+    logging.info(f"[{current_time}] Received ICE candidate from {client_id}")
     
-    # Just acknowledge receipt
-    if client_id in webrtc_clients:
+    # Get the peer connection for this client
+    conn_data = webrtc_peer_connections.get(client_id)
+    if not conn_data:
+        logging.warning(f"[{current_time}] Received ICE candidate but no connection found for client {client_id}")
+        return
+        
+    if not conn_data.get('active', False):
+        logging.warning(f"[{current_time}] Received ICE candidate but connection not active for client {client_id}")
+        return
+    
+    # Log the timing information to debug race conditions
+    created_at = conn_data.get('created_at', 0)
+    time_since_creation = current_time - created_at
+    logging.info(f"[{current_time}] Processing ICE candidate {time_since_creation:.3f} seconds after PC creation")
+    
+    try:
+        # Extract the candidate data
+        candidate = data.get('candidate')
+        sdp_mid = data.get('sdpMid')
+        sdp_mline_index = data.get('sdpMLineIndex')
+        
+        if not candidate or sdp_mid is None or sdp_mline_index is None:
+            logging.error(f"Invalid ICE candidate from {client_id}: missing required fields")
+            return
+        
+        # Add the candidate to the peer connection
+        pc = conn_data['pc']
+        session_id = conn_data['session_id']
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def add_candidate():
+            logging.info(f"[{session_id}] [{time.time()}] Adding ICE candidate to peer connection")
+            logging.info(f"[{session_id}] ICE dictionary: {{'candidate': {candidate}, 'sdpMid': {sdp_mid}, 'sdpMLineIndex': {sdp_mline_index}}}")
+            await pc.addIceCandidate({
+                'candidate': candidate,
+                'sdpMid': sdp_mid,
+                'sdpMLineIndex': sdp_mline_index
+            })
+            logging.info(f"[{session_id}] [{time.time()}] Successfully added ICE candidate")
+        
+        # Run the async code
+        future = asyncio.run_coroutine_threadsafe(add_candidate(), loop)
+        future.result(timeout=5)  # Wait for at most 5 seconds
+        
+        logging.info(f"[{session_id}] Added ICE candidate from client {client_id}")
+        
+        # Acknowledge receipt
         emit('webrtc_ice_ack', {'status': 'received'})
+    
+    except Exception as e:
+        logging.error(f"Error adding ICE candidate: {e}")
+        emit('webrtc_error', {'error': f'Failed to add ICE candidate: {str(e)}'})
 
 # Handle direct audio data from WebRTC
 @socketio.on('webrtc_audio')
@@ -128,26 +314,34 @@ def handle_webrtc_audio(data):
     client_id = request.sid
     logging.info(f"Received WebRTC audio data from {client_id}, size: {len(data['audio'])}")
     
+    # Check if we have an active WebRTC connection for this client
+    conn_data = webrtc_peer_connections.get(client_id, {})
+    session_id = conn_data.get('session_id', f'webrtc-{int(time.time() * 1000)}')
+    webrtc_active = conn_data.get('active', False)
+    
     # get audio data using base 64 
     audio_base64 = data['audio']
-    session_id = data.get('sessionId', f'webrtc-{int(time.time() * 1000)}')
     original_audio_b64 = data['audio']  # Store original audio for fallback
     temp_file_path = None
     
     # this is a backup to the ThreadPoolExecutor timeout)
     def timeout_handler():
-        logging.warning(f"Backup timeout triggered - ensuring response is sent")
+        logging.warning(f"[{session_id}] Backup timeout triggered - ensuring response is sent")
         try:
-            emit('webrtc_translation', {
-                'sessionId': session_id,
-                'english_text': '(Translation timed out)',
-                'spanish_text': '(Traducción agotada por tiempo)',
-                'audio': original_audio_b64,
-                'is_original_audio': True,
-                'backup_timeout': True
-            })
+            if not webrtc_active:
+                # Only send socket.io response if we're not using WebRTC
+                emit('webrtc_translation', {
+                    'sessionId': session_id,
+                    'english_text': '(Translation timed out)',
+                    'spanish_text': '(Traducción agotada por tiempo)',
+                    'audio': original_audio_b64,
+                    'is_original_audio': True,
+                    'backup_timeout': True
+                })
+            else:
+                logging.info(f"[{session_id}] Not sending Socket.IO response - using WebRTC data channel")
         except Exception as e:
-            logging.error(f"Error in backup timeout handler: {e}")
+            logging.error(f"[{session_id}] Error in backup timeout handler: {e}")
     
     # Start backup timeout timer
     backup_timer = threading.Timer(18.0, timeout_handler)  # 18 seconds (slightly longer than primary timeout)
@@ -169,7 +363,7 @@ def handle_webrtc_audio(data):
                 wf.setframerate(16000)  # 16kHz
                 wf.writeframes(audio_bytes)
             
-            logging.info(f"Saved WebRTC audio to {temp_file_path} ({len(audio_bytes)} bytes)")
+            logging.info(f"[{session_id}] Saved WebRTC audio to {temp_file_path} ({len(audio_bytes)} bytes)")
         
         # Create a simpler transcribe function that won't hang
         def safe_transcribe(audio_path, timeout=10):
@@ -181,10 +375,10 @@ def handle_webrtc_audio(data):
                     audio_data = recognizer.record(source)
                     # Only try Google for simplicity and speed
                     text = recognizer.recognize_google(audio_data)
-                    logging.info(f"Transcribed with Google: {text}")
+                    logging.info(f"[{session_id}] Transcribed with Google: {text}")
                     return text.strip()
             except Exception as e:
-                logging.warning(f"Transcription error: {e}")
+                logging.warning(f"[{session_id}] Transcription error: {e}")
                 return "Hello, this is a test message."  # Default fallback text
         
         # translation function to be executed with a timeout
@@ -192,17 +386,23 @@ def handle_webrtc_audio(data):
             try:
                 # Process audio - transcribe using the simplified function
                 english_text = safe_transcribe(temp_file_path)
-                logging.info(f"Using text for translation: {english_text}")
+                logging.info(f"[{session_id}] Using text for translation: {english_text}")
                 
                 # Get the translation
                 translator = TranslationModel()
                 spanish_text = translator.translate(english_text)
-                logging.info(f"Translated to: {spanish_text}")
+                logging.info(f"[{session_id}] Translated to: {spanish_text}")
                 
                 # Generate simple audio 
                 tts_audio = generate_tts(spanish_text)
                 tts_audio_b64 = base64.b64encode(tts_audio).decode('utf-8')
                 
+                # If we have an active WebRTC connection, feed the audio into the track
+                if webrtc_active and conn_data.get('track'):
+                    track = conn_data['track']
+                    logging.info(f"[{session_id}] Adding TTS audio to GeminiAudioTrack queue ({len(tts_audio)} bytes)")
+                    track.add_audio(tts_audio)
+                    
                 return {
                     'success': True,
                     'english_text': english_text,
@@ -210,7 +410,7 @@ def handle_webrtc_audio(data):
                     'audio': tts_audio_b64
                 }
             except Exception as e:
-                logging.error(f"Error in process_and_translate: {e}")
+                logging.error(f"[{session_id}] Error in process_and_translate: {e}")
                 return {
                     'success': False,
                     'error': str(e)
@@ -226,54 +426,78 @@ def handle_webrtc_audio(data):
                     result = future.result(timeout=15)  # 15 secs 
                     
                     if result['success']:
-                        # Send back results
-                        emit('webrtc_translation', {
-                            'sessionId': session_id,
-                            'english_text': result['english_text'],
-                            'spanish_text': result['spanish_text'],
-                            'audio': result['audio']
-                        })
+                        # If using WebRTC, just send the text results, not the audio
+                        # (audio will be sent through the WebRTC track)
+                        if webrtc_active:
+                            logging.info(f"[{session_id}] Using WebRTC for audio - sending only text via Socket.IO")
+                            emit('webrtc_translation', {
+                                'sessionId': session_id,
+                                'english_text': result['english_text'],
+                                'spanish_text': result['spanish_text'],
+                                # Omit audio as it's sent via WebRTC
+                                'using_webrtc': True
+                            })
+                        else:
+                            # Send back results via Socket.IO (fallback method)
+                            emit('webrtc_translation', {
+                                'sessionId': session_id,
+                                'english_text': result['english_text'],
+                                'spanish_text': result['spanish_text'],
+                                'audio': result['audio']
+                            })
                         result_sent = True
                         # Log success for debugging
-                        logging.info(f"Successfully sent translation back to client: '{result['spanish_text']}'")
+                        logging.info(f"[{session_id}] Successfully processed translation: '{result['spanish_text']}'")
                     else:
                         # Handle translation failure - still return original audio
-                        logging.warning(f"Translation process failed: {result.get('error', 'Unknown error')}")
+                        logging.warning(f"[{session_id}] Translation process failed: {result.get('error', 'Unknown error')}")
                         emit('webrtc_translation', {
                             'sessionId': session_id,
                             'english_text': '(Translation failed)',
                             'spanish_text': '(Error de traducción)',
-                            'audio': original_audio_b64,
-                            'is_original_audio': True
+                            'audio': original_audio_b64 if not webrtc_active else None,
+                            'is_original_audio': True,
+                            'using_webrtc': webrtc_active
                         })
                         result_sent = True
                 except concurrent.futures.TimeoutError:
                     # Inner timeout - handle separately to ensure we get here
-                    logging.warning(f"Inner timeout occurred in future.result")
+                    logging.warning(f"[{session_id}] Inner timeout occurred in future.result")
                     # This will be handled by the outer exception handler
                     raise
         except concurrent.futures.TimeoutError:
             # Timeout occurred - send back the original audio
             if not result_sent:
-                logging.warning(f"Translation timed out after 15 seconds, returning original audio")
-                emit('webrtc_translation', {
-                    'sessionId': session_id,
-                    'english_text': '(Translation timed out)',
-                    'spanish_text': '(Traducción agotada por tiempo)',
-                    'audio': original_audio_b64,
-                    'is_original_audio': True
-                })
+                logging.warning(f"[{session_id}] Translation timed out after 15 seconds")
+                if not webrtc_active:
+                    # Only send fallback audio via Socket.IO if not using WebRTC
+                    emit('webrtc_translation', {
+                        'sessionId': session_id,
+                        'english_text': '(Translation timed out)',
+                        'spanish_text': '(Traducción agotada por tiempo)',
+                        'audio': original_audio_b64,
+                        'is_original_audio': True
+                    })
+                else:
+                    # For WebRTC, just send the status message
+                    emit('webrtc_translation', {
+                        'sessionId': session_id,
+                        'english_text': '(Translation timed out)',
+                        'spanish_text': '(Traducción agotada por tiempo)',
+                        'using_webrtc': True
+                    })
                 result_sent = True
         except Exception as e:
             # Generic error in the executor - send back the original audio
             if not result_sent:
-                logging.error(f"Error in translation executor: {e}")
+                logging.error(f"[{session_id}] Error in translation executor: {e}")
                 emit('webrtc_translation', {
                     'sessionId': session_id,
                     'english_text': '(Translation error)',
                     'spanish_text': '(Error de traducción)',
-                    'audio': original_audio_b64,
-                    'is_original_audio': True
+                    'audio': original_audio_b64 if not webrtc_active else None,
+                    'is_original_audio': True,
+                    'using_webrtc': webrtc_active
                 })
                 result_sent = True
         # Cancel the backup timer if we successfully sent a result
@@ -288,15 +512,16 @@ def handle_webrtc_audio(data):
                 pass
                 
     except Exception as e:
-        logging.error(f"Error processing WebRTC audio: {e}")
+        logging.error(f"[{session_id}] Error processing WebRTC audio: {e}")
         # Make sure we send a response even in case of error
         if not result_sent:
             emit('webrtc_translation', {
                 'sessionId': session_id,
                 'english_text': '(Processing error)',
                 'spanish_text': '(Error de procesamiento)',
-                'audio': original_audio_b64,
-                'is_original_audio': True
+                'audio': original_audio_b64 if not webrtc_active else None,
+                'is_original_audio': True,
+                'using_webrtc': webrtc_active
             })
         
         # Cancel the backup timer
@@ -1181,6 +1406,141 @@ def transcribe_audio(audio_path):
     except ImportError:
         logging.error("Neither SpeechRecognition nor Whisper available")
         return None
+
+class GeminiAudioTrack(MediaStreamTrack):
+    """
+    A custom MediaStreamTrack that reads from a queue of PCM audio chunks and 
+    streams them to the client as audio frames.
+    """
+    kind = "audio"
+    
+    def __init__(self, session_id):
+        super().__init__()
+        self.session_id = session_id
+        self.queue = deque()
+        # Create a queue for this session if it doesn't exist
+        if session_id not in tts_audio_queues:
+            tts_audio_queues[session_id] = self.queue
+        else:
+            self.queue = tts_audio_queues[session_id]
+        
+        # Audio parameters
+        self._timestamp = 0
+        self._frame_duration = 0.02  # 20ms per frame (standard for WebRTC)
+        self._sample_rate = 48000   # WebRTC standard
+        self._samples = int(self._frame_duration * self._sample_rate)
+        
+        # Create silence frame for when queue is empty
+        silence_samples = np.zeros(self._samples, dtype=np.int16)
+        self._silence_frame = self._create_audio_frame(silence_samples)
+        
+        logging.info(f"[{session_id}] GeminiAudioTrack initialized")
+    
+    def _create_audio_frame(self, samples):
+        """Create an AudioFrame from PCM samples."""
+        samples = np.ascontiguousarray(samples, dtype=np.int16)
+        samples = samples.reshape(1, -1)  # shape => (1 channel, numSamples)
+        frame = av.AudioFrame.from_ndarray(
+            samples,
+            format='s16p',  # signed 16-bit planar
+            layout='mono'  # mono layout
+        )
+        frame.sample_rate = self._sample_rate
+        frame.time_base = Fraction(1, self._sample_rate)
+        return frame
+    
+    def _resample_audio(self, audio_chunk, from_rate=16000, to_rate=48000):
+        """Resample audio from one rate to another"""
+        try:
+            # Convert bytes to numpy array if it's in bytes format
+            if isinstance(audio_chunk, bytes):
+                audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
+            else:
+                audio_array = audio_chunk
+                
+            # Calculate resampling ratio
+            ratio = to_rate / from_rate
+            # Calculate new length
+            new_length = int(len(audio_array) * ratio)
+            
+            # Resample using scipy
+            from scipy import signal
+            resampled = signal.resample(audio_array, new_length)
+            
+            # Convert back to int16
+            resampled = resampled.astype(np.int16)
+            
+            logging.debug(f"[{self.session_id}] Resampled audio from {len(audio_array)} to {len(resampled)} samples")
+            return resampled
+        except Exception as e:
+            logging.error(f"[{self.session_id}] Error resampling audio: {e}")
+            return np.zeros(self._samples, dtype=np.int16)  # Return silence on error
+    
+    async def recv(self):
+        """Get the next audio frame from the queue."""
+        try:
+            if self.queue and len(self.queue) > 0:
+                # Get PCM chunk from queue
+                pcm_chunk = self.queue.popleft()
+                
+                # Resample if needed (16kHz -> 48kHz)
+                resampled_chunk = self._resample_audio(pcm_chunk)
+                
+                # Create frame (ensuring it has the right number of samples)
+                if len(resampled_chunk) >= self._samples:
+                    # If chunk is larger than our frame size, only use what we need
+                    frame_samples = resampled_chunk[:self._samples]
+                    # Save the rest for next time
+                    if len(resampled_chunk) > self._samples:
+                        self.queue.appendleft(resampled_chunk[self._samples:].tobytes())
+                else:
+                    # If chunk is smaller, pad with silence
+                    frame_samples = np.pad(
+                        resampled_chunk, 
+                        (0, self._samples - len(resampled_chunk)), 
+                        'constant'
+                    )
+                
+                # Create audio frame
+                frame = self._create_audio_frame(frame_samples)
+                frame.pts = self._timestamp
+                self._timestamp += self._samples
+                
+                logging.info(f"[{self.session_id}] GeminiAudioTrack sent frame: {len(frame_samples)} samples")
+                return frame
+            else:
+                # Return silence if queue is empty
+                silence_frame = self._silence_frame.clone()
+                silence_frame.pts = self._timestamp
+                self._timestamp += self._samples
+                
+                logging.debug(f"[{self.session_id}] GeminiAudioTrack sent silence frame (queue empty)")
+                return silence_frame
+        except Exception as e:
+            logging.error(f"[{self.session_id}] Error in GeminiAudioTrack.recv: {e}")
+            # Return silence frame on error
+            silence_frame = self._silence_frame.clone()
+            silence_frame.pts = self._timestamp
+            self._timestamp += self._samples
+            return silence_frame
+    
+    def add_audio(self, pcm_data, sample_rate=16000):
+        """Add audio samples to the queue to be sent."""
+        try:
+            if isinstance(pcm_data, bytes):
+                # Convert bytes to numpy array if needed
+                samples = np.frombuffer(pcm_data, dtype=np.int16)
+            else:
+                samples = pcm_data
+            
+            logging.info(f"[{self.session_id}] Adding {len(samples)} samples to GeminiAudioTrack queue")
+            
+            # Don't do resampling here - we'll do it in recv() to ensure correct frame sizes
+            self.queue.append(samples)
+            return True
+        except Exception as e:
+            logging.error(f"[{self.session_id}] Error adding audio to GeminiAudioTrack: {e}")
+            return False
 
 if __name__ == '__main__':
     logging.info(f"Starting server on port {PORT}")
