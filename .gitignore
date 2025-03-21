@@ -47,3 +47,10 @@ Server/uploads/
 # Ignore environment variables
 .env
 Backend/.env
+Flutter UI/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+Flutter UI/ios/Runner/GeneratedPluginRegistrant.m
+Flutter UI/linux/flutter/generated_plugin_registrant.cc
+Flutter UI/linux/flutter/generated_plugins.cmake
+Flutter UI/linux/flutter/ephemeral/.plugin_symlinks/file_selector_linux
+Flutter UI/linux/flutter/ephemeral/.plugin_symlinks/path_provider_linux
+Flutter UI/macos/Flutter/GeneratedPluginRegistrant.swift
