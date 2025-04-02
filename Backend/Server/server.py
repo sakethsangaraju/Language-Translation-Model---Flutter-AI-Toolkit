@@ -10,7 +10,7 @@ import google.generativeai as generative
 import wave
 
 # Load API key from environment
-os.environ['GOOGLE_API_KEY'] = ''
+os.environ['GOOGLE_API_KEY'] = 'AIzaSyBJp3zblcb8ShBGUbPeic85X3AjWbrfPTg'
 generative.configure(api_key=os.environ['GOOGLE_API_KEY'])
 MODEL = "gemini-2.0-flash-exp"  # use your model ID
 TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"

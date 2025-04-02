@@ -1,24 +1,23 @@
 name: google_flow
-description: "A new Flutter project for Google Flow integration."
+description: "A simple English-Spanish translation chat app."
 publish_to: 'none' # This prevents accidental publishing to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.6.1 <4.0.0"
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.29.2 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_animate: ^4.5.2
-  http: ^1.1.0
-  image_picker: ^1.1.2
-  socket_io_client: ^3.0.2
+  web: ^1.1.1
   logger: ^2.0.0
-  cupertino_icons: ^1.0.2
-  audioplayers: ^6.4.0
-  path_provider: ^2.1.5
-  just_audio: ^0.9.36
   web_socket_channel: ^3.0.2
+  cupertino_icons: ^1.0.2
+  flutter_animate: ^4.5.0
+  flutter_web_plugins:
+    sdk: flutter
+  js: ^0.7.2  # Add js package for JavaScript interop
 
 dev_dependencies:
   flutter_test:

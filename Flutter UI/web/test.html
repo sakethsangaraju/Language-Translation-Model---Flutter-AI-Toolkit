@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Video Test</title>
+  <style>
+    body { 
+      background-color: #333;
+      color: white;
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    
+    #video-container {
+      width: 640px;
+      height: 480px;
+      border: 1px solid white;
+      margin: 20px auto;
+      position: relative;
+    }
+    
+    video {
+      width: 100%;
+      height: 100%;
+      background-color: black;
+    }
+    
+    button {
+      padding: 10px 15px;
+      margin: 10px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    
+    #log {
+      border: 1px solid #ccc;
+      padding: 10px;
+      margin-top: 20px;
+      height: 200px;
+      overflow-y: scroll;
+      background-color: #222;
+    }
+  </style>
+</head>
+<body>
+  <h1>Video Initialization Test</h1>
+  
+  <div id="video-container">
+    <video id="videoElement" autoplay muted playsinline></video>
+  </div>
+  
+  <div style="text-align: center;">
+    <button id="cameraBtn">Start Camera</button>
+    <button id="screenBtn">Start Screen Share</button>
+    <button id="stopBtn">Stop Stream</button>
+  </div>
+  
+  <div id="log"></div>
+  
+  <script>
+    // Logging function
+    function log(message) {
+      const logElement = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.textContent = new Date().toLocaleTimeString() + ': ' + message;
+      logElement.appendChild(entry);
+      logElement.scrollTop = logElement.scrollHeight;
+      console.log(message);
+    }
+    
+    // Video element
+    const video = document.getElementById('videoElement');
+    let stream = null;
+    
+    // Log video element properties
+    log(`Video element found: ${video !== null}`);
+    
+    // Setup event listeners
+    video.addEventListener('loadedmetadata', () => log('Video metadata loaded'));
+    video.addEventListener('playing', () => log('Video started playing'));
+    video.addEventListener('error', (e) => log('Video error: ' + e));
+    
+    // Start camera stream
+    document.getElementById('cameraBtn').addEventListener('click', async () => {
+      try {
+        log('Requesting camera...');
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false
+        });
+        video.srcObject = stream;
+        log('Camera started');
+      } catch (err) {
+        log('Camera error: ' + err);
+      }
+    });
+    
+    // Start screen share
+    document.getElementById('screenBtn').addEventListener('click', async () => {
+      try {
+        log('Requesting screen share...');
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false
+        });
+        video.srcObject = stream;
+        log('Screen share started');
+      } catch (err) {
+        log('Screen share error: ' + err);
+      }
+    });
+    
+    // Stop stream
+    document.getElementById('stopBtn').addEventListener('click', () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+        stream = null;
+        log('Stream stopped');
+      } else {
+        log('No active stream to stop');
+      }
+    });
+    
+    // Log initial state
+    window.addEventListener('load', () => {
+      log('Page loaded');
+      log(`Video element size: ${video.offsetWidth}x${video.offsetHeight}`);
+      log(`Browser supports getUserMedia: ${navigator.mediaDevices && !!navigator.mediaDevices.getUserMedia}`);
+      log(`Browser supports getDisplayMedia: ${navigator.mediaDevices && !!navigator.mediaDevices.getDisplayMedia}`);
+    });
+  </script>
+</body>
+</html> 

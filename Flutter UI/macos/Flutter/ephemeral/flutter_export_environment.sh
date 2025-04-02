@@ -1,6 +1,6 @@
 #!/bin/sh
 # This is a generated file; do not edit or check into version control.
-export "FLUTTER_ROOT=C:\flutter\src\flutter"
+export "FLUTTER_ROOT=C:\Users\menar\fvm\versions\3.29.2"
 export "FLUTTER_APPLICATION_PATH=C:\Users\menar\OneDrive\Documents\GitHub\Language-Translation-Model---Flutter-AI-Toolkit\Flutter UI"
 export "COCOAPODS_PARALLEL_CODE_SIGN=true"
 export "FLUTTER_BUILD_DIR=build"

@@ -32,10 +32,10 @@
       "languageVersion": "3.4"
     },
     {
-      "name": "cross_file",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/cross_file-0.3.4+2",
+      "name": "crypto",
+      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/crypto-3.0.6",
       "packageUri": "lib/",
-      "languageVersion": "3.3"
+      "languageVersion": "3.4"
     },
     {
       "name": "cupertino_icons",
@@ -44,46 +44,10 @@
       "languageVersion": "3.1"
     },
     {
-      "name": "dart_webrtc",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/dart_webrtc-1.5.2+hotfix.1",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
       "name": "fake_async",
       "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/fake_async-1.3.1",
       "packageUri": "lib/",
       "languageVersion": "2.12"
-    },
-    {
-      "name": "ffi",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/ffi-2.1.3",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
-      "name": "file_selector_linux",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_linux-0.9.3+2",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
-      "name": "file_selector_macos",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_macos-0.9.4+2",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
-      "name": "file_selector_platform_interface",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_platform_interface-2.6.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
-    },
-    {
-      "name": "file_selector_windows",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_windows-0.9.3+4",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
     },
     {
       "name": "flutter",
@@ -104,12 +68,6 @@
       "languageVersion": "3.5"
     },
     {
-      "name": "flutter_plugin_android_lifecycle",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_plugin_android_lifecycle-2.0.27",
-      "packageUri": "lib/",
-      "languageVersion": "3.6"
-    },
-    {
       "name": "flutter_shaders",
       "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_shaders-0.1.3",
       "packageUri": "lib/",
@@ -126,72 +84,6 @@
       "rootUri": "file:///C:/flutter/src/flutter/packages/flutter_web_plugins",
       "packageUri": "lib/",
       "languageVersion": "3.2"
-    },
-    {
-      "name": "flutter_webrtc",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-0.12.11",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
-      "name": "http",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/http-1.3.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "http_parser",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/http_parser-4.1.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "image_picker",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker-1.1.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
-      "name": "image_picker_android",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_android-0.8.12+21",
-      "packageUri": "lib/",
-      "languageVersion": "3.5"
-    },
-    {
-      "name": "image_picker_for_web",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_for_web-3.0.6",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "image_picker_ios",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_ios-0.8.12+2",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "image_picker_linux",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_linux-0.2.1+1",
-      "packageUri": "lib/",
-      "languageVersion": "2.19"
-    },
-    {
-      "name": "image_picker_macos",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_macos-0.2.1+2",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "image_picker_platform_interface",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_platform_interface-2.10.1",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "image_picker_windows",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_windows-0.2.1+1",
-      "packageUri": "lib/",
-      "languageVersion": "2.19"
     },
     {
       "name": "js",
@@ -230,12 +122,6 @@
       "languageVersion": "2.17"
     },
     {
-      "name": "logging",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/logging-1.3.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
       "name": "matcher",
       "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/matcher-0.12.16+1",
       "packageUri": "lib/",
@@ -254,62 +140,8 @@
       "languageVersion": "2.12"
     },
     {
-      "name": "mime",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/mime-2.0.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.2"
-    },
-    {
       "name": "path",
       "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path-1.9.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
-    },
-    {
-      "name": "path_provider",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path_provider-2.1.5",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
-      "name": "path_provider_android",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path_provider_android-2.2.15",
-      "packageUri": "lib/",
-      "languageVersion": "3.5"
-    },
-    {
-      "name": "path_provider_foundation",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path_provider_foundation-2.4.1",
-      "packageUri": "lib/",
-      "languageVersion": "3.3"
-    },
-    {
-      "name": "path_provider_linux",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path_provider_linux-2.2.1",
-      "packageUri": "lib/",
-      "languageVersion": "2.19"
-    },
-    {
-      "name": "path_provider_platform_interface",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path_provider_platform_interface-2.1.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
-    },
-    {
-      "name": "path_provider_windows",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/path_provider_windows-2.3.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.2"
-    },
-    {
-      "name": "platform",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/platform-3.1.6",
-      "packageUri": "lib/",
-      "languageVersion": "3.2"
-    },
-    {
-      "name": "plugin_platform_interface",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/plugin_platform_interface-2.1.8",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
@@ -318,18 +150,6 @@
       "rootUri": "file:///C:/flutter/src/flutter/bin/cache/pkg/sky_engine",
       "packageUri": "lib/",
       "languageVersion": "3.2"
-    },
-    {
-      "name": "socket_io_client",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/socket_io_client-3.0.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
-    },
-    {
-      "name": "socket_io_common",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/socket_io_common-3.0.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
     },
     {
       "name": "source_span",
@@ -354,12 +174,6 @@
       "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/string_scanner-1.3.0",
       "packageUri": "lib/",
       "languageVersion": "3.1"
-    },
-    {
-      "name": "synchronized",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/synchronized-3.3.0+3",
-      "packageUri": "lib/",
-      "languageVersion": "3.5"
     },
     {
       "name": "term_glyph",
@@ -398,14 +212,14 @@
       "languageVersion": "3.4"
     },
     {
-      "name": "webrtc_interface",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/webrtc_interface-1.2.1+hotfix.1",
+      "name": "web_socket",
+      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/web_socket-0.1.6",
       "packageUri": "lib/",
-      "languageVersion": "2.12"
+      "languageVersion": "3.3"
     },
     {
-      "name": "xdg_directories",
-      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/xdg_directories-1.1.0",
+      "name": "web_socket_channel",
+      "rootUri": "file:///C:/Users/menar/AppData/Local/Pub/Cache/hosted/pub.dev/web_socket_channel-3.0.2",
       "packageUri": "lib/",
       "languageVersion": "3.3"
     },
@@ -416,7 +230,7 @@
       "languageVersion": "3.6"
     }
   ],
-  "generated": "2025-03-05T23:26:55.686552Z",
+  "generated": "2025-03-31T23:33:13.896125Z",
   "generator": "pub",
   "generatorVersion": "3.6.1",
   "flutterRoot": "file:///C:/flutter/src/flutter",
