@@ -1,0 +1,48 @@
+# Environment and sensitive files
+.env
+*.env
+*.mp3
+
+# Flutter/Dart specific
+.dart_tool/
+.packages
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+.flutter-versions
+
+# Build outputs
+build/
+*.build/
+*.build/
+
+# IDE specific
+.vscode/
+.idea/
+*.iml
+
+# Platform specific generated files
+## iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework/
+ios/Flutter/Flutter.podspec
+ios/Runner/GeneratedPluginRegistrant.*
+
+## Android
+android/.gradle/
+android/app/build/
+android/local.properties
+
+## macOS
+macos/Flutter/ephemeral/
+macos/Pods/
+
+## Linux
+linux/flutter/ephemeral/
+
+## Windows
+windows/flutter/generated_plugin_registrant.*
+
+# Uploaded content
+Server/uploads/ 

@@ -8,10 +8,18 @@ import io
 from pydub import AudioSegment
 import google.generativeai as generative
 import wave
+from dotenv import load_dotenv
 
-# Load API key from environment
-os.environ['GOOGLE_API_KEY'] = ''
-generative.configure(api_key=os.environ['GOOGLE_API_KEY'])
+# Load environment variables
+load_dotenv()
+
+# Get API key from environment
+api_key = os.getenv('GOOGLE_API_KEY')
+if not api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable is not set")
+
+os.environ['GOOGLE_API_KEY'] = api_key
+generative.configure(api_key=api_key)
 MODEL = "gemini-2.0-flash-exp"  # use your model ID
 TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"
 
@@ -80,6 +88,7 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
                 try:
                     # Initialize audio_data attribute on session
                     session.audio_data = b''
+                    audio_start_sent = False
                     
                     while True:
                         try:
@@ -91,6 +100,12 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
 
                                 model_turn = response.server_content.model_turn
                                 if model_turn:
+                                    # Send a signal when audio first starts to come in this turn
+                                    if not audio_start_sent and any(hasattr(part, 'inline_data') for part in model_turn.parts):
+                                        await client_websocket.send(json.dumps({"audio_start": True}))
+                                        audio_start_sent = True
+                                        print("Sent audio_start signal")
+                                        
                                     for part in model_turn.parts:
                                         if hasattr(part, 'text') and part.text is not None:
                                             await client_websocket.send(json.dumps({"text": part.text}))
@@ -105,17 +120,24 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
                                             
                                             print("audio received")
 
-                                if response.server_content.turn_complete:
-                                    print('\n<Turn complete>')
-                                    # Transcribe the accumulated audio here
-                                    if hasattr(session, 'audio_data') and session.audio_data:
-                                        transcribed_text = transcribe_audio(session.audio_data)
-                                        if transcribed_text:    
+                                    if response.server_content.turn_complete:
+                                        print('\n<Turn complete>')
+                                        # Transcribe the accumulated audio here
+                                        if hasattr(session, 'audio_data') and session.audio_data:
+                                            transcribed_text = transcribe_audio(session.audio_data)
+                                            if transcribed_text:    
+                                                await client_websocket.send(json.dumps({
+                                                    "text": transcribed_text
+                                                }))
+                                                
+                                            # Send a turn_complete flag to the client
                                             await client_websocket.send(json.dumps({
-                                                "text": transcribed_text
+                                                "turn_complete": True
                                             }))
-                                        # Clear the accumulated audio data
-                                        session.audio_data = b''
+                                                
+                                            # Clear the accumulated audio data
+                                            session.audio_data = b''
+                                            audio_start_sent = False
                         except websockets.exceptions.ConnectionClosedOK:
                             print("Client connection closed normally (receive)")
                             break  # Exit the loop if the connection is closed
@@ -233,8 +255,8 @@ def convert_pcm_to_mp3(pcm_data):
 
 
 async def main() -> None:
-    async with websockets.serve(gemini_session_handler, "localhost", 9083):
-        print("Running websocket server localhost:9083...")
+    async with websockets.serve(gemini_session_handler, "0.0.0.0", 9083):
+        print("Running websocket server on 0.0.0.0:9083...")
         await asyncio.Future()  # Keep the server running indefinitely
 
 

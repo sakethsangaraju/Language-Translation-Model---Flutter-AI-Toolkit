@@ -31,8 +31,151 @@
 
   <title>translationapp</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Web Audio API Initialization Script -->
+  <script>
+    // Initialize Web Audio context and variables
+    let audioContext;
+    let initialized = false;
+    let waitingQueue = [];
+    let compressor;
+    
+    // Try to initialize automatically, but browsers might block this
+    document.addEventListener('DOMContentLoaded', function() {
+      // Try to initialize, but it might not work without user gesture
+      tryInitAudio();
+      
+      // Add a click listener to the document to init on first click
+      document.addEventListener('click', function() {
+        if (!initialized) {
+          tryInitAudio();
+        }
+      }, { once: true });
+    });
+    
+    // Function to handle initialization attempts
+    function tryInitAudio() {
+      if (initialized) return true;
+      
+      try {
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioContext({sampleRate: 24000});
+        
+        // Set up audio processing chain for better sound quality
+        compressor = audioContext.createDynamicsCompressor();
+        compressor.threshold.value = -15;
+        compressor.knee.value = 10;
+        compressor.ratio.value = 3;
+        compressor.attack.value = 0.03;
+        compressor.release.value = 0.25;
+        compressor.connect(audioContext.destination);
+        
+        initialized = true;
+        console.log("Web Audio API initialized successfully");
+        
+        // Process any audio that was waiting
+        processWaitingQueue();
+        return true;
+      } catch (e) {
+        console.error("Web Audio API initialization failed:", e);
+        return false;
+      }
+    }
+    
+    // Function to add to queue if can't play now
+    function queueAudioIfNeeded(base64Data) {
+      waitingQueue.push(base64Data);
+      if (waitingQueue.length > 3) {
+        // Keep only the most recent 3 audio chunks
+        waitingQueue = waitingQueue.slice(-3);
+      }
+    }
+    
+    // Process any waiting audio
+    function processWaitingQueue() {
+      if (waitingQueue.length === 0) return;
+      
+      const queueCopy = [...waitingQueue];
+      waitingQueue = [];
+      
+      queueCopy.forEach(base64Data => {
+        playPcmAudio(base64Data);
+      });
+    }
+    
+    // Initialize audio and play (or queue for later)
+    function initWebAudio() {
+      return tryInitAudio();
+    }
+    
+    // Play PCM audio from a base64 encoded string
+    function playPcmAudio(base64Data) {
+      // If not initialized, queue the audio and try to initialize
+      if (!initialized) {
+        queueAudioIfNeeded(base64Data);
+        if (!tryInitAudio()) {
+          console.log("Audio queued for when initialization is possible");
+          return;
+        }
+      }
+      
+      try {
+        // Decode base64 to binary
+        const binaryString = window.atob(base64Data);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        // Convert bytes to Int16Array (PCM format)
+        const pcmData = new Int16Array(bytes.buffer);
+        
+        // Convert Int16 PCM to Float32 (required by Web Audio API)
+        const audioData = new Float32Array(pcmData.length);
+        for (let i = 0; i < pcmData.length; i++) {
+          // Convert from int16 to float32 (-1.0 to 1.0 range)
+          audioData[i] = pcmData[i] / 32768.0;
+        }
+        
+        // Create audio buffer
+        const audioBuffer = audioContext.createBuffer(1, audioData.length, 24000);
+        const channelData = audioBuffer.getChannelData(0);
+        
+        // Apply a simple smoothing filter to reduce robotic sound
+        const smoothing = 0.2;
+        channelData[0] = audioData[0];
+        for (let i = 1; i < audioData.length; i++) {
+          // Apply simple low-pass filter to smooth out harsh transitions
+          channelData[i] = smoothing * audioData[i] + (1 - smoothing) * channelData[i-1];
+        }
+        
+        // Create and play audio source
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        
+        // Add a gain node to control volume
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 1.0; // Full volume
+        
+        // Connect the audio processing chain
+        source.connect(gainNode);
+        gainNode.connect(compressor);
+        
+        // Start playback with a small fade-in
+        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+        gainNode.gain.linearRampToValueAtTime(1.0, audioContext.currentTime + 0.05);
+        source.start();
+        
+        console.log("Playing audio, length:", audioData.length);
+      } catch (e) {
+        console.error("Error playing PCM audio:", e);
+      }
+    }
+  </script>
 </head>
 <body>
+  <!-- This script injects the Flutter initialization JS -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
