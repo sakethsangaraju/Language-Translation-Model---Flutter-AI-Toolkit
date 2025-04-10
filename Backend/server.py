@@ -20,8 +20,8 @@ if not api_key:
 
 os.environ['GOOGLE_API_KEY'] = api_key
 generative.configure(api_key=api_key)
-MODEL = "gemini-2.0-flash-exp"  # use your model ID
-TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"
+MODEL = "gemini-2.0-flash-exp"   # Latest stable Flash model for general use
+TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"  # Same model for transcription
 
 client = genai.Client(
   http_options={

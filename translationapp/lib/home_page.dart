@@ -12,6 +12,22 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 // Only import js for web platforms
 import 'js_interop.dart';
 
+// Define theme colors based on NativeFlow logo
+class NativeFlowTheme {
+  static const Color primaryBlue = Color(0xFF4D96FF);
+  static const Color accentPurple = Color(0xFF5C33FF);
+  static const Color lightBlue = Color(0xFF8BC7FF);
+  static const Color backgroundGrey = Color(0xFFF9FAFC);
+  static const Color textDark = Color(0xFF2D3748);
+
+  // Gradient for background and buttons
+  static const LinearGradient primaryGradient = LinearGradient(
+    colors: [primaryBlue, accentPurple],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -19,7 +35,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late WebSocketChannel channel;
   final record = AudioRecorder();
   bool isRecording = false;
@@ -33,6 +49,26 @@ class _HomePageState extends State<HomePage> {
   bool isAiSpeaking = false;
   int silentSeconds = 0;
 
+  // Animation controllers
+  late AnimationController _logoAnimationController;
+  late AnimationController _buttonScaleController;
+  late AnimationController _buttonSlideController;
+  late AnimationController _statusAnimationController;
+  late AnimationController _micIconController;
+  late AnimationController _speakingAnimationController;
+  late AnimationController _progressAnimationController;
+
+  // Animations
+  late Animation<double> _logoFadeAnimation;
+  late Animation<Offset> _logoSlideAnimation;
+  late Animation<double> _buttonScaleAnimation;
+  late Animation<Offset> _buttonSlideAnimation;
+  late Animation<double> _statusFadeAnimation;
+  late Animation<Offset> _statusSlideAnimation;
+  late Animation<double> _micIconScaleAnimation;
+  late Animation<double> _speakingScaleAnimation;
+  late Animation<double> _progressFadeAnimation;
+
   // Playback
   final List<int> _pcmData = [];
   // New temporary buffer for storing audio chunks until turn_complete
@@ -41,7 +77,7 @@ class _HomePageState extends State<HomePage> {
 
   // Add a timer to detect silence in audio stream
   Timer? _audioSilenceTimer;
-  bool _waitingForMoreAudio = false;
+  final bool _waitingForMoreAudio = false;
   // Lowering the silence threshold to make audio play faster
   final int _silenceThresholdMs =
       200; // Time to wait for more audio before playing
@@ -54,9 +90,126 @@ class _HomePageState extends State<HomePage> {
   // This prevents delays if large continuous audio is received
   final int _maxBufferSize = 192000; // ~4 seconds at 24kHz 16-bit mono
 
+  // Add a timeout timer for audio streaming
+  Timer? _speakingTimeoutTimer;
+  DateTime? _lastAudioChunkTime;
+
   @override
   void initState() {
     super.initState();
+
+    // Initialize animation controllers
+    _logoAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+
+    _buttonScaleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+
+    _buttonSlideController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+
+    _statusAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+
+    _micIconController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+
+    _speakingAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    )..repeat(reverse: true);
+
+    _progressAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+
+    // Set up animations
+    _logoFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _logoAnimationController, curve: Curves.easeOut),
+    );
+
+    _logoSlideAnimation = Tween<Offset>(
+      begin: const Offset(-0.2, 0.0),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _logoAnimationController,
+        curve: Curves.easeOutQuad,
+      ),
+    );
+
+    _buttonScaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
+      CurvedAnimation(
+        parent: _buttonScaleController,
+        curve: Curves.easeInOutCubic,
+      ),
+    );
+
+    _buttonSlideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, 0.5),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _buttonSlideController,
+        curve: Curves.easeOutQuad,
+      ),
+    );
+
+    _statusFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _statusAnimationController,
+        curve: Curves.easeOut,
+      ),
+    );
+
+    _statusSlideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, 0.2),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _statusAnimationController,
+        curve: Curves.easeOutQuad,
+      ),
+    );
+
+    _micIconScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(parent: _micIconController, curve: Curves.easeInOut),
+    );
+
+    _speakingScaleAnimation = Tween<double>(begin: 0.9, end: 1.1).animate(
+      CurvedAnimation(
+        parent: _speakingAnimationController,
+        curve: Curves.easeInOut,
+      ),
+    );
+
+    _progressFadeAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _progressAnimationController,
+        curve: Curves.easeInOut,
+      ),
+    );
+
+    // Start animations
+    _logoAnimationController.forward();
+    _buttonSlideController.forward();
+    _statusAnimationController.forward();
+
+    // Add a listener to update AI speaking status after audio chunks stop coming
+    // This ensures UI updates if we don't get a turn_complete signal
+    _speakingTimeoutTimer = Timer(Duration.zero, () {});
+
     _initConnection();
 
     // Try to initialize web audio immediately
@@ -65,6 +218,253 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  @override
+  void dispose() {
+    // Dispose animation controllers
+    _logoAnimationController.dispose();
+    _buttonScaleController.dispose();
+    _buttonSlideController.dispose();
+    _statusAnimationController.dispose();
+    _micIconController.dispose();
+    _speakingAnimationController.dispose();
+    _progressAnimationController.dispose();
+
+    silenceTimer?.cancel();
+    sendTimer?.cancel();
+    _audioSilenceTimer?.cancel();
+    if (isRecording) stopStream();
+    record.dispose();
+    channel.sink.close();
+    super.dispose();
+    log('Disposed');
+    _speakingTimeoutTimer?.cancel();
+  }
+
+  @override
+  void didUpdateWidget(HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reset status animation when message changes
+    _statusAnimationController.reset();
+    _statusAnimationController.forward();
+  }
+
+  Widget _recordingButton() {
+    return SlideTransition(
+      position: _buttonSlideAnimation,
+      child: ScaleTransition(
+        scale:
+            isRecording || isAiSpeaking
+                ? _buttonScaleAnimation
+                : const AlwaysStoppedAnimation(1.0),
+        child: FloatingActionButton(
+          onPressed:
+              isConnecting || isAiSpeaking
+                  ? null
+                  : () async {
+                    if (isRecording) {
+                      stopRecordingOnly();
+                      setState(() => isRecording = false);
+                    } else {
+                      sendJsonAudioStream();
+                    }
+                  },
+          backgroundColor:
+              isRecording
+                  ? Colors.red
+                  : isAiSpeaking
+                  ? NativeFlowTheme.accentPurple
+                  : NativeFlowTheme.primaryBlue,
+          child: Icon(
+            isRecording
+                ? Icons.stop
+                : isAiSpeaking
+                ? Icons.hearing
+                : Icons.mic,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogo() {
+    return FadeTransition(
+      opacity: _logoFadeAnimation,
+      child: SlideTransition(
+        position: _logoSlideAnimation,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Native',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: NativeFlowTheme.primaryBlue,
+              ),
+            ),
+            Text(
+              'Flow',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: NativeFlowTheme.accentPurple,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusMessage() {
+    final message =
+        isConnecting
+            ? connectionStatus
+            : (serverResponse.isNotEmpty
+                ? serverResponse
+                : isAiSpeaking
+                ? 'Gemini is speaking...'
+                : isRecording
+                ? 'Listening...'
+                : 'Press microphone to start speaking');
+
+    final textColor =
+        isAiSpeaking
+            ? NativeFlowTheme.accentPurple
+            : isRecording
+            ? NativeFlowTheme.primaryBlue
+            : NativeFlowTheme.textDark;
+
+    return FadeTransition(
+      opacity: _statusFadeAnimation,
+      child: SlideTransition(
+        position: _statusSlideAnimation,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(13),
+                blurRadius: 10,
+                spreadRadius: 0,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight:
+                  isAiSpeaking || isRecording
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+              color: textColor,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Reset status animation when building with new status
+    if (_statusAnimationController.status == AnimationStatus.completed) {
+      _statusAnimationController.reset();
+      _statusAnimationController.forward();
+    }
+
+    return Scaffold(
+      backgroundColor: NativeFlowTheme.backgroundGrey,
+      appBar: AppBar(
+        title: _buildLogo(),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        centerTitle: true,
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.white, NativeFlowTheme.backgroundGrey],
+          ),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (isConnecting)
+                FadeTransition(
+                  opacity: _progressFadeAnimation,
+                  child: const CircularProgressIndicator(),
+                ),
+
+              Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: _buildStatusMessage(),
+              ),
+
+              if (isRecording)
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: FadeTransition(
+                    opacity: const AlwaysStoppedAnimation(1.0),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ScaleTransition(
+                          scale: _micIconScaleAnimation,
+                          child: Icon(
+                            Icons.mic,
+                            color: NativeFlowTheme.primaryBlue,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Recording will auto-stop after 5 seconds of silence',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              if (isAiSpeaking)
+                ScaleTransition(
+                  scale: _speakingScaleAnimation,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 20),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(50),
+                      color: NativeFlowTheme.accentPurple.withAlpha(26),
+                    ),
+                    child: Icon(
+                      Icons.hearing,
+                      color: NativeFlowTheme.accentPurple,
+                      size: 28,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      floatingActionButton: _recordingButton(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+    );
+  }
+
+  // Include the remaining methods from the original file
   void _initConnection() async {
     setState(() {
       isConnecting = true;
@@ -111,7 +511,7 @@ class _HomePageState extends State<HomePage> {
       // You would need to adjust this for production to match your server setup
       return 'ws://localhost:9083';
     } else if (Platform.isAndroid) {
-      // 10.0.2.2 is special IP for Android emulator to connect to host machine
+      // 10.0.2.2 special IP for Android emulator to connect to host machine
       return 'ws://10.0.2.2:9083';
     } else {
       // For iOS simulator and other platforms
@@ -135,25 +535,12 @@ class _HomePageState extends State<HomePage> {
   void _playWebAudio(String base64Audio) {
     if (kIsWeb) {
       try {
-        // Web Audio should try to initialize automatically now
         playWebAudio(base64Audio);
         log('Audio passed to Web Audio API for playback');
       } catch (e) {
         log('Error playing audio on web: $e');
       }
     }
-  }
-
-  @override
-  void dispose() {
-    silenceTimer?.cancel();
-    sendTimer?.cancel();
-    _audioSilenceTimer?.cancel();
-    if (isRecording) stopStream();
-    record.dispose();
-    channel.sink.close();
-    super.dispose();
-    log('Disposed');
   }
 
   Future<void> _initAudioSession() async {
@@ -202,18 +589,71 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  // Helper method to show permission alert with option to open settings
+  void _showPermissionAlert(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Microphone Permission Required'),
+          content: const Text(
+            'This app needs microphone access to record audio. '
+            'Please enable microphone access in your device settings.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Open app settings - this will work for both iOS and Android
+  void _openAppSettings() async {
+    if (kIsWeb) return; // Not applicable for web
+
+    try {
+      // You would typically use a plugin like app_settings or permission_handler
+      // For this example, we'll just log the action
+      log('Opening app settings (would normally use app_settings package)');
+
+      // If you add the package, the code would look like:
+      // import 'package:app_settings/app_settings.dart';
+      // AppSettings.openAppSettings();
+    } catch (e) {
+      log('Error opening settings: $e');
+    }
+  }
+
   void sendJsonAudioStream() async {
-    if (isConnecting) {
-      log('Cannot record while connecting to server');
+    if (isConnecting || isAiSpeaking) {
+      log('Cannot record while connecting or AI speaking');
       return;
     }
 
-    if (isAiSpeaking) {
-      log('Cannot start recording while AI is speaking');
-      return;
-    }
+    // --- Permission Check ---
+    bool hasPermission = await record.hasPermission();
+    if (!hasPermission) {
+      log('Microphone permission not granted');
 
-    if (!isRecording && await record.hasPermission()) {
+      // Show an alert with option to open settings
+      _showPermissionAlert(context);
+      return; // Don't proceed if permission is denied
+    }
+    // --- End Permission Check ---
+
+    // Proceed with recording ONLY if permission is granted
+    if (!isRecording) {
       channel.sink.add(
         jsonEncode({
           "setup": {
@@ -223,57 +663,67 @@ class _HomePageState extends State<HomePage> {
       );
       log('Config sent');
 
-      final stream = await record.startStream(
-        const RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: 16000,
-          numChannels: 1,
-        ),
-      );
+      try {
+        // Add try-catch around startStream
+        final stream = await record.startStream(
+          const RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+        );
 
-      audioBuffer.clear();
-      sendTimer?.cancel();
+        audioBuffer.clear();
+        sendTimer?.cancel();
 
-      // Start the silence detection timer
-      _startSilenceDetection();
+        // Start the silence detection timer
+        _startSilenceDetection();
 
-      // Send data periodically
-      sendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (audioBuffer.isNotEmpty) {
-          sendBufferedAudio();
-          // Reset the silence timer when we send data
-          silentSeconds = 0;
-        }
-      });
-
-      stream.listen(
-        (List<int> chunk) {
-          if (chunk.isNotEmpty) {
-            audioBuffer.addAll(chunk);
-            log('Buffered ${chunk.length} bytes, Total: ${audioBuffer.length}');
-            // Reset silence detection since we got audio
+        // Send data periodically
+        sendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          if (audioBuffer.isNotEmpty) {
+            sendBufferedAudio();
+            // Reset the silence timer when we send data
             silentSeconds = 0;
           }
-        },
-        onError: (error) {
-          log('Stream error: $error');
-          setState(() => isRecording = false);
-          sendTimer?.cancel();
-          silenceTimer?.cancel();
-        },
-        onDone: () {
-          log('Stream done');
-          sendTimer?.cancel();
-          silenceTimer?.cancel();
-          if (audioBuffer.isNotEmpty) sendBufferedAudio();
-          setState(() => isRecording = false);
-        },
-      );
+        });
 
-      setState(() => isRecording = true);
+        stream.listen(
+          (List<int> chunk) {
+            if (chunk.isNotEmpty) {
+              audioBuffer.addAll(chunk);
+              log(
+                'Buffered ${chunk.length} bytes, Total: ${audioBuffer.length}',
+              );
+              // Reset silence detection since we got audio
+              silentSeconds = 0;
+            }
+          },
+          onError: (error) {
+            log('Stream error: $error');
+            setState(() => isRecording = false);
+            sendTimer?.cancel();
+            silenceTimer?.cancel();
+          },
+          onDone: () {
+            log('Stream done');
+            sendTimer?.cancel();
+            silenceTimer?.cancel();
+            if (audioBuffer.isNotEmpty) sendBufferedAudio();
+            setState(() => isRecording = false);
+          },
+        );
+
+        setState(() => isRecording = true);
+      } catch (e) {
+        log('Error starting recording stream: $e');
+        setState(() => serverResponse = "Error starting recording.");
+        return; // Stop if stream fails to start
+      }
     } else {
-      log('Microphone permission denied');
-      setState(() => serverResponse = "Microphone permission denied");
+      log(
+        'Already recording.',
+      ); // Handle case where button is pressed while recording
     }
   }
 
@@ -295,62 +745,72 @@ class _HomePageState extends State<HomePage> {
               isAiSpeaking = true;
               _tempPcmBuffer.clear(); // Clear any leftover audio
             });
+            _lastAudioChunkTime = DateTime.now();
           }
-          // Handle audio chunks
+          // Handle audio chunks - buffer them for later playback
           else if (data['audio'] != null) {
             String base64Audio = data['audio'] as String;
-            var pcmBytes = base64Decode(base64Audio);
-            log('Received audio: ${pcmBytes.length} bytes');
 
-            // Add the audio data to the temporary buffer
+            // Decode and buffer the audio chunk instead of playing immediately
+            var pcmBytes = base64Decode(base64Audio);
             _tempPcmBuffer.addAll(pcmBytes);
+
+            // Update last chunk time
+            _lastAudioChunkTime = DateTime.now();
+
             log(
-              'Added ${pcmBytes.length} bytes to temp buffer, total: ${_tempPcmBuffer.length}',
+              'Buffered audio: ${pcmBytes.length} bytes, Total buffered: ${_tempPcmBuffer.length}',
             );
 
-            // Play immediately if the buffer gets too large
-            if (_tempPcmBuffer.length > _maxBufferSize) {
-              log(
-                'Buffer size exceeded maximum, playing now: ${_tempPcmBuffer.length} bytes',
-              );
-              _audioSilenceTimer?.cancel();
-              _playBufferedAudio();
-              return;
-            }
+            // Reset speaking timeout - if we stop receiving chunks for 1.5 seconds, assume speaking is done
+            _speakingTimeoutTimer?.cancel();
+            _speakingTimeoutTimer = Timer(const Duration(milliseconds: 1500), () {
+              if (isAiSpeaking &&
+                  _lastAudioChunkTime != null &&
+                  DateTime.now()
+                          .difference(_lastAudioChunkTime!)
+                          .inMilliseconds >
+                      1400) {
+                log(
+                  'No audio chunks received for 1.5 seconds, assuming AI is done speaking',
+                );
 
-            // Reset the silence timer each time we receive audio
-            _waitingForMoreAudio = true;
-            _audioSilenceTimer?.cancel();
-            _audioSilenceTimer = Timer(
-              Duration(milliseconds: _silenceThresholdMs),
-              () {
-                // If we've waited a bit and no more audio has arrived, play what we have
-                if (_waitingForMoreAudio && _tempPcmBuffer.isNotEmpty) {
+                // If we haven't received a turn_complete but we have buffered audio,
+                // play the buffered audio now
+                if (_tempPcmBuffer.isNotEmpty) {
                   log(
-                    'Audio silence detected, playing current buffer: ${_tempPcmBuffer.length} bytes',
+                    'Playing buffered audio after timeout (${_tempPcmBuffer.length} bytes)',
                   );
                   _playBufferedAudio();
-                  _waitingForMoreAudio = false;
                 }
-              },
-            );
+
+                setState(() {
+                  isAiSpeaking = false;
+                });
+              }
+            });
           }
-          // Handle turn_complete flag
+          // Handle turn_complete flag - play all buffered audio
           else if (data['turn_complete'] == true) {
             log('Turn complete signal received');
-            _audioSilenceTimer?.cancel();
 
-            // Only play if we haven't already played due to silence detection
+            // Play the entire buffered audio when the turn is complete
             if (_tempPcmBuffer.isNotEmpty) {
               log(
-                'Playing final buffered audio on turn_complete: ${_tempPcmBuffer.length} bytes',
+                'Turn complete: Playing buffered audio (${_tempPcmBuffer.length} bytes)',
               );
               _playBufferedAudio();
-            } else {
+            }
+
+            // Cancel the speaking timeout timer
+            _speakingTimeoutTimer?.cancel();
+
+            // Update UI state after a short delay to ensure all audio is played
+            Future.delayed(const Duration(milliseconds: 500), () {
               setState(() {
                 isAiSpeaking = false;
               });
-            }
+            });
           }
         } catch (e) {
           log('Decoding error: $e, message: $message');
@@ -371,6 +831,44 @@ class _HomePageState extends State<HomePage> {
         });
       },
     );
+  }
+
+  // New helper method to play all buffered audio
+  void _playBufferedAudio() {
+    if (_tempPcmBuffer.isEmpty) return;
+
+    if (kIsWeb) {
+      // For web, encode the entire buffer back to base64 and play it
+      String combinedBase64 = base64Encode(_tempPcmBuffer);
+      _playCombinedWebAudio(combinedBase64);
+    } else {
+      // For mobile, ensure PCM player is ready
+      if (!isSetup) {
+        _setupPcmSound().then((_) {
+          // Feed the entire buffered data at once
+          _feedAudioData(List<int>.from(_tempPcmBuffer));
+        });
+      } else {
+        // Feed the entire buffered data at once
+        _feedAudioData(List<int>.from(_tempPcmBuffer));
+      }
+    }
+
+    // Clear the buffer after playing
+    _tempPcmBuffer.clear();
+  }
+
+  // New helper method for web to play combined audio
+  void _playCombinedWebAudio(String base64Audio) {
+    if (kIsWeb) {
+      try {
+        // Using existing web audio playback function
+        playWebAudio(base64Audio);
+        log('Combined audio passed to Web Audio API for playback');
+      } catch (e) {
+        log('Error playing combined audio on web: $e');
+      }
+    }
   }
 
   Future<void> _setupPcmSound() async {
@@ -451,135 +949,17 @@ class _HomePageState extends State<HomePage> {
     log('Recording stopped');
   }
 
-  // Play the buffered audio
-  void _playBufferedAudio() {
-    if (_tempPcmBuffer.isEmpty) return;
-
-    // Calculate estimated duration for UI updates
-    final estimatedDurationMs = _tempPcmBuffer.length ~/ _bytesPerMs;
-    log('Estimated audio duration: ${estimatedDurationMs}ms');
-
-    if (kIsWeb) {
-      // For web, encode the entire buffer as base64 and play it
-      String fullBase64Audio = base64Encode(_tempPcmBuffer);
-      _playWebAudio(fullBase64Audio);
-    } else {
-      // For mobile, add the complete buffer to the playback buffer
-      _pcmData.addAll(_tempPcmBuffer);
-
-      if (!isSetup) {
-        log('Setting up PCM sound for the first time');
-        _setupPcmSound();
-      } else {
-        log('Feeding complete PCM data to sound player');
-        try {
-          FlutterPcmSound.feed(
-            PcmArrayInt16(
-              bytes: ByteData.view(Uint8List.fromList(_tempPcmBuffer).buffer),
-            ),
-          );
-          log('Complete PCM data fed successfully');
-        } catch (e) {
-          log('Error feeding complete PCM data: $e');
-        }
-      }
-    }
-
-    // Set a timer to mark when the AI is done speaking (estimated)
-    Future.delayed(Duration(milliseconds: estimatedDurationMs), () {
-      setState(() {
-        isAiSpeaking = false;
-      });
-    });
-
-    // Clear the temporary buffer after playing
-    _tempPcmBuffer.clear();
-  }
-
-  Widget _recordingButton() {
-    return FloatingActionButton(
-      onPressed:
-          isConnecting || isAiSpeaking
-              ? null // Disable the button while connecting or AI is speaking
-              : () async {
-                if (isRecording) {
-                  stopRecordingOnly();
-                  setState(() => isRecording = false);
-                } else {
-                  sendJsonAudioStream();
-                }
-              },
-      backgroundColor:
-          isRecording
-              ? Colors.red
-              : isAiSpeaking
-              ? Colors.deepPurple
-              : Theme.of(context).primaryColor,
-      child: Icon(
-        isRecording
-            ? Icons.stop
-            : isAiSpeaking
-            ? Icons.hearing
-            : Icons.mic,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Google Flow: The Live Translation App'),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (isConnecting) const CircularProgressIndicator(),
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text(
-                isConnecting
-                    ? connectionStatus
-                    : (serverResponse.isNotEmpty
-                        ? serverResponse
-                        : isAiSpeaking
-                        ? 'Gemini is speaking...'
-                        : isRecording
-                        ? 'Listening...'
-                        : 'Press microphone to start speaking'),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight:
-                      isAiSpeaking || isRecording
-                          ? FontWeight.bold
-                          : FontWeight.normal,
-                ),
-              ),
-            ),
-            if (isRecording)
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.mic,
-                      color: Color.fromARGB(255, 46, 13, 231),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Recording will auto-stop after 5 seconds of silence',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 14),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+  // New helper method to directly feed audio data to the audio player
+  void _feedAudioData(List<int> pcmBytes) {
+    try {
+      FlutterPcmSound.feed(
+        PcmArrayInt16(
+          bytes: ByteData.view(Uint8List.fromList(pcmBytes).buffer),
         ),
-      ),
-      floatingActionButton: _recordingButton(),
-    );
+      );
+      log('PCM data fed directly: ${pcmBytes.length} bytes');
+    } catch (e) {
+      log('Error feeding PCM data: $e');
+    }
   }
 }

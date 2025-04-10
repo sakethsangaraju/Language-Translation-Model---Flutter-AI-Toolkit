@@ -29,16 +29,25 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>translationapp</title>
+  <title>NativeFlow</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- Web Audio API Initialization Script -->
+  <!-- Improved Web Audio API Script for Real-time Streaming -->
   <script>
     // Initialize Web Audio context and variables
     let audioContext;
     let initialized = false;
-    let waitingQueue = [];
+    let audioQueue = [];
+    let isPlaying = false;
+    let lastChunkTime = 0;
     let compressor;
+    let mediaStreamDestination;
+    let audioElement;
+    let streamingMode = true; // Enable streaming mode by default
+    
+    // Keep track of chunks to prevent duplicates (using a simple hash-like approach)
+    let recentChunkHashes = new Set();
+    const MAX_RECENT_CHUNKS = 100; // Maximum number of recent chunks to track
     
     // Try to initialize automatically, but browsers might block this
     document.addEventListener('DOMContentLoaded', function() {
@@ -70,11 +79,17 @@
         compressor.release.value = 0.25;
         compressor.connect(audioContext.destination);
         
+        // Set up media stream if needed for continuous audio
+        mediaStreamDestination = audioContext.createMediaStreamDestination();
+        compressor.connect(mediaStreamDestination);
+        
+        // Create audio element for streaming if needed
+        audioElement = document.createElement('audio');
+        audioElement.style.display = 'none';
+        document.body.appendChild(audioElement);
+        
         initialized = true;
         console.log("Web Audio API initialized successfully");
-        
-        // Process any audio that was waiting
-        processWaitingQueue();
         return true;
       } catch (e) {
         console.error("Web Audio API initialization failed:", e);
@@ -82,50 +97,72 @@
       }
     }
     
-    // Function to add to queue if can't play now
-    function queueAudioIfNeeded(base64Data) {
-      waitingQueue.push(base64Data);
-      if (waitingQueue.length > 3) {
-        // Keep only the most recent 3 audio chunks
-        waitingQueue = waitingQueue.slice(-3);
-      }
-    }
-    
-    // Process any waiting audio
-    function processWaitingQueue() {
-      if (waitingQueue.length === 0) return;
-      
-      const queueCopy = [...waitingQueue];
-      waitingQueue = [];
-      
-      queueCopy.forEach(base64Data => {
-        playPcmAudio(base64Data);
-      });
-    }
-    
     // Initialize audio and play (or queue for later)
     function initWebAudio() {
       return tryInitAudio();
     }
     
-    // Play PCM audio from a base64 encoded string
-    function playPcmAudio(base64Data) {
-      // If not initialized, queue the audio and try to initialize
-      if (!initialized) {
-        queueAudioIfNeeded(base64Data);
-        if (!tryInitAudio()) {
-          console.log("Audio queued for when initialization is possible");
-          return;
-        }
+    // Generate a simple hash for a chunk to detect duplicates
+    function simpleHash(data, length) {
+      if (length < 10) return "empty"; // Too small to hash
+      
+      // Sample a few bytes from different parts of the data
+      // This is a very simple approach but should work for our needs
+      let hash = "";
+      const samples = [0, Math.floor(length/3), Math.floor(2*length/3), length-1];
+      for (let pos of samples) {
+        hash += data.charCodeAt(pos).toString(16);
+      }
+      return hash + "-" + length;
+    }
+    
+    // Add chunk hash to recent set and remove old ones if needed
+    function trackChunk(hash) {
+      recentChunkHashes.add(hash);
+      
+      // Clean up old hashes if we have too many
+      if (recentChunkHashes.size > MAX_RECENT_CHUNKS) {
+        const iterator = recentChunkHashes.values();
+        recentChunkHashes.delete(iterator.next().value); // Remove oldest
+      }
+    }
+    
+    // Check if we've seen this chunk before
+    function isDuplicateChunk(hash) {
+      return recentChunkHashes.has(hash);
+    }
+    
+    // Play PCM audio from a base64 encoded string - optimized for streaming
+    function playPcmAudioStreaming(base64Data) {
+      // If not initialized, try to initialize
+      if (!initialized && !tryInitAudio()) {
+        console.log("Cannot play audio - Web Audio API not initialized");
+        return;
       }
       
       try {
+        // Check for duplicate chunks
+        const chunkHash = simpleHash(base64Data, base64Data.length);
+        if (isDuplicateChunk(chunkHash)) {
+          console.log("Skipping duplicate audio chunk");
+          return;
+        }
+        
+        // Track this chunk to prevent duplicates
+        trackChunk(chunkHash);
+        
         // Decode base64 to binary
         const binaryString = window.atob(base64Data);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) {
           bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        // Skip tiny chunks (likely empty or incomplete)
+        if (len < 100) {
+          console.log("Skipping very small audio chunk:", len);
+          return;
         }
         
         // Convert bytes to Int16Array (PCM format)
@@ -140,15 +177,7 @@
         
         // Create audio buffer
         const audioBuffer = audioContext.createBuffer(1, audioData.length, 24000);
-        const channelData = audioBuffer.getChannelData(0);
-        
-        // Apply a simple smoothing filter to reduce robotic sound
-        const smoothing = 0.2;
-        channelData[0] = audioData[0];
-        for (let i = 1; i < audioData.length; i++) {
-          // Apply simple low-pass filter to smooth out harsh transitions
-          channelData[i] = smoothing * audioData[i] + (1 - smoothing) * channelData[i-1];
-        }
+        audioBuffer.copyToChannel(audioData, 0);
         
         // Create and play audio source
         const source = audioContext.createBufferSource();
@@ -156,21 +185,36 @@
         
         // Add a gain node to control volume
         const gainNode = audioContext.createGain();
-        gainNode.gain.value = 1.0; // Full volume
+        gainNode.gain.value = 1.0;
         
         // Connect the audio processing chain
         source.connect(gainNode);
         gainNode.connect(compressor);
         
-        // Start playback with a small fade-in
-        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-        gainNode.gain.linearRampToValueAtTime(1.0, audioContext.currentTime + 0.05);
-        source.start();
+        // Smooth transition between chunks
+        const now = audioContext.currentTime;
+        const gapTime = now - lastChunkTime;
         
-        console.log("Playing audio, length:", audioData.length);
+        // If it's been longer than 0.5 seconds since the last chunk,
+        // fade in to avoid clicks/pops
+        if (gapTime > 0.5) {
+          gainNode.gain.setValueAtTime(0, now);
+          gainNode.gain.linearRampToValueAtTime(1.0, now + 0.05);
+        }
+        
+        // Start playback
+        source.start();
+        lastChunkTime = audioContext.currentTime + (audioBuffer.duration || 0.1);
+        
+        console.log("Playing audio chunk, length:", audioData.length);
       } catch (e) {
-        console.error("Error playing PCM audio:", e);
+        console.error("Error playing streaming audio:", e);
       }
+    }
+    
+    // Original function for larger buffers - kept for compatibility
+    function playPcmAudio(base64Data) {
+      playPcmAudioStreaming(base64Data);
     }
   </script>
 </head>
