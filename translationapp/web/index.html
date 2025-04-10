@@ -133,24 +133,55 @@
     }
     
     // Play PCM audio from a base64 encoded string - optimized for streaming
-    function playPcmAudioStreaming(base64Data) {
+    async function playPcmAudioStreaming(base64Data) {
       // If not initialized, try to initialize
       if (!initialized && !tryInitAudio()) {
         console.log("Cannot play audio - Web Audio API not initialized");
         return;
       }
-      
+
+      // *** FIX: Check and Resume AudioContext if suspended ***
+      if (audioContext.state === 'suspended') {
+        console.log("AudioContext is suspended, attempting to resume...");
+        try {
+          await audioContext.resume(); // Use await as resume() returns a Promise
+          console.log("AudioContext resumed successfully.");
+        } catch (resumeError) {
+          console.error("Failed to resume AudioContext:", resumeError);
+          // Optionally, notify the user or try again later
+          return; // Stop if we can't resume
+        }
+      }
+      // *** End Fix ***
+
+      // Check if context is running now
+      if (audioContext.state !== 'running') {
+         console.log("AudioContext is not running, cannot play audio. State:", audioContext.state);
+         return;
+      }
+
       try {
-        // Check for duplicate chunks
+        // Get current time earlier for both timing and gap detection
+        const now = audioContext.currentTime;
+        const gapTime = now - lastChunkTime;
+
+        // *** FIX: Clear duplicate hashes if it's likely a new response ***
+        if (gapTime > 0.5) { // Use the same threshold as the fade-in logic
+          console.log("Significant gap detected, clearing recent chunk hashes.");
+          recentChunkHashes.clear(); // Clear the set for the new response
+        }
+        // *** End Fix ***
+
+        // Check for duplicate chunks (after potentially clearing the set)
         const chunkHash = simpleHash(base64Data, base64Data.length);
         if (isDuplicateChunk(chunkHash)) {
           console.log("Skipping duplicate audio chunk");
           return;
         }
-        
+
         // Track this chunk to prevent duplicates
         trackChunk(chunkHash);
-        
+
         // Decode base64 to binary
         const binaryString = window.atob(base64Data);
         const len = binaryString.length;
@@ -158,42 +189,41 @@
         for (let i = 0; i < len; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        
+
         // Skip tiny chunks (likely empty or incomplete)
         if (len < 100) {
           console.log("Skipping very small audio chunk:", len);
           return;
         }
-        
+
         // Convert bytes to Int16Array (PCM format)
         const pcmData = new Int16Array(bytes.buffer);
-        
+
         // Convert Int16 PCM to Float32 (required by Web Audio API)
         const audioData = new Float32Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) {
           // Convert from int16 to float32 (-1.0 to 1.0 range)
           audioData[i] = pcmData[i] / 32768.0;
         }
-        
+
         // Create audio buffer
-        const audioBuffer = audioContext.createBuffer(1, audioData.length, 24000);
+        const audioBuffer = audioContext.createBuffer(1, audioData.length, 24000); // Ensure sample rate matches context
         audioBuffer.copyToChannel(audioData, 0);
-        
+
         // Create and play audio source
         const source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
-        
+
         // Add a gain node to control volume
         const gainNode = audioContext.createGain();
         gainNode.gain.value = 1.0;
-        
+
         // Connect the audio processing chain
         source.connect(gainNode);
-        gainNode.connect(compressor);
-        
+        gainNode.connect(compressor); // Assuming 'compressor' is still valid
+
         // Smooth transition between chunks
-        const now = audioContext.currentTime;
-        const gapTime = now - lastChunkTime;
+        // (gapTime already calculated at the top of the function)
         
         // If it's been longer than 0.5 seconds since the last chunk,
         // fade in to avoid clicks/pops
@@ -201,20 +231,20 @@
           gainNode.gain.setValueAtTime(0, now);
           gainNode.gain.linearRampToValueAtTime(1.0, now + 0.05);
         }
-        
+
         // Start playback
-        source.start();
-        lastChunkTime = audioContext.currentTime + (audioBuffer.duration || 0.1);
-        
-        console.log("Playing audio chunk, length:", audioData.length);
+        source.start(now); // Start immediately relative to context time
+        lastChunkTime = now + (audioBuffer.duration || 0.1); // Update last chunk time based on current time
+
+        console.log("Playing audio chunk, length:", audioData.length, "at time:", now);
       } catch (e) {
         console.error("Error playing streaming audio:", e);
       }
     }
     
-    // Original function for larger buffers - kept for compatibility
+    // Ensure the original function also calls the modified streaming one
     function playPcmAudio(base64Data) {
-      playPcmAudioStreaming(base64Data);
+      playPcmAudioStreaming(base64Data); // Calls the potentially async function
     }
   </script>
 </head>
