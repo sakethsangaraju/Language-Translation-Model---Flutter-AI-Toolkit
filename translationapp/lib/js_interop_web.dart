@@ -4,7 +4,7 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 // ignore: avoid_web_libraries_in_flutter
-import 'dart:js' as js;
+import 'dart:js_interop';
 import 'package:crypto/crypto.dart' as crypto;
 
 /// Rolling list of recently played chunk fingerprints.
@@ -16,16 +16,26 @@ final Map<String, DateTime> _chunkTimestamps = {};
 const int _minTimeBetweenSimilarChunksMs =
     300; // Don't play similar chunks less than 300ms apart
 
+// Define JS interop functions
+@JS('initWebAudio')
+external JSAny? _initWebAudio();
+
+@JS('playPcmAudioStreaming')
+external JSAny? _playPcmAudioStreaming(String base64Audio);
+
 /// Try to initialize Web Audio - returns true if successful
-void callInitWebAudio() {
+bool callInitWebAudio() {
   try {
     // The JavaScript function returns a boolean indicating success
-    final result = js.context.callMethod('initWebAudio');
+    final result = _initWebAudio();
+    final success = result == true;
     developer.log(
-      'Web Audio API initialization attempt: ${result == true ? 'successful' : 'failed'}',
+      'Web Audio API initialization attempt: ${success ? 'successful' : 'failed'}',
     );
+    return success;
   } catch (e) {
     developer.log('Error initializing Web Audio API: $e');
+    return false;
   }
 }
 
@@ -97,7 +107,7 @@ void callPlayPcmAudio(String base64Audio) {
     }
 
     // Call the JavaScript streaming function with the base64 audio
-    js.context.callMethod('playPcmAudioStreaming', [base64Audio]);
+    _playPcmAudioStreaming(base64Audio);
     developer.log(
       'Audio chunk passed to Web Audio API (fingerprint = $fullDigest, length = ${bytes.length})',
     );
@@ -138,3 +148,6 @@ List<String> _computePartialFingerprints(List<int> bytes) {
 
   return result;
 }
+
+@JS('initWebAudio')
+external JSBoolean? initWebAudio();

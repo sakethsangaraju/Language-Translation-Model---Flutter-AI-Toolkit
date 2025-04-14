@@ -5,14 +5,16 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
+// Import flutter_pcm_sound only for non-web platforms
+import 'package:flutter_pcm_sound/flutter_pcm_sound.dart'
+    if (dart.library.html) 'web_dummy.dart';
 import 'package:audio_session/audio_session.dart';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 // Only import js for web platforms
 import 'js_interop.dart';
 
-// Define theme colors based on NativeFlow logo
+// Define theme colors based on NativeFlow logo (Assuming NativeFlowTheme class exists)
 class NativeFlowTheme {
   static const Color primaryBlue = Color(0xFF4D96FF);
   static const Color accentPurple = Color(0xFF5C33FF);
@@ -69,26 +71,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late Animation<double> _speakingScaleAnimation;
   late Animation<double> _progressFadeAnimation;
 
-  // Playback
-  final List<int> _pcmData = [];
-  // New temporary buffer for storing audio chunks until turn_complete
+  // --- Playback State ---
+  // Use _playbackPcmData for the Android callback feeding mechanism
+  final List<int> _playbackPcmData = [];
+  // Temporary buffer for accumulating chunks before playing (used by both platforms)
   final List<int> _tempPcmBuffer = [];
-  bool isSetup = false;
+  // Track if the PCM player (Android) is set up
+  bool _isPcmPlayerSetup = false; // Renamed from isSetup for clarity
+  // --- End Playback State ---
 
   // Add a timer to detect silence in audio stream
   Timer? _audioSilenceTimer;
-  final bool _waitingForMoreAudio = false;
-  // Lowering the silence threshold to make audio play faster
-  final int _silenceThresholdMs =
-      200; // Time to wait for more audio before playing
-
-  // This is an important constant - it helps calculate estimated duration
-  // 24000 samples/sec * 2 bytes/sample = 48 bytes per millisecond
-  final int _bytesPerMs = 48;
-
-  // Maximum accumulated buffer size before forcing playback
-  // This prevents delays if large continuous audio is received
-  final int _maxBufferSize = 192000; // ~4 seconds at 24kHz 16-bit mono
 
   // Add a timeout timer for audio streaming
   Timer? _speakingTimeoutTimer;
@@ -232,12 +225,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     silenceTimer?.cancel();
     sendTimer?.cancel();
     _audioSilenceTimer?.cancel();
+    _speakingTimeoutTimer?.cancel();
+
     if (isRecording) stopStream();
     record.dispose();
     channel.sink.close();
+
+    // Dispose FlutterPcmSound resources only if not on web and if setup
+    if (!kIsWeb && _isPcmPlayerSetup) {
+      try {
+        // Now FlutterPcmSound is only referenced inside the non-web block
+        FlutterPcmSound.release();
+        log('FlutterPcmSound released');
+      } catch (e) {
+        log('Error releasing FlutterPcmSound: $e');
+      }
+    }
+
     super.dispose();
     log('Disposed');
-    _speakingTimeoutTimer?.cancel();
   }
 
   @override
@@ -464,7 +470,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // Include the remaining methods from the original file
+  // --- Connection and Initialization ---
   void _initConnection() async {
     setState(() {
       isConnecting = true;
@@ -483,10 +489,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       channel = WebSocketChannel.connect(Uri.parse(wsUrl));
 
-      // Set up audio and listeners
+      // Set up audio and listeners AFTER connection is established
+      // Setup PCM Sound only for Android/iOS
       if (!kIsWeb) {
         await _setupPcmSound();
       }
+      // Listen for messages regardless of platform
       _listenForAudioStream();
 
       setState(() {
@@ -506,15 +514,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   String _getWebSocketUrl() {
     if (kIsWeb) {
-      // In web, use window.location.hostname instead of 10.0.2.2
-      // Since this is a simplification, we'll use localhost by default
-      // You would need to adjust this for production to match your server setup
+      // Use localhost for web development, adjust for production
       return 'ws://localhost:9083';
     } else if (Platform.isAndroid) {
-      // 10.0.2.2 special IP for Android emulator to connect to host machine
+      // Special IP for Android emulator
       return 'ws://10.0.2.2:9083';
     } else {
-      // For iOS simulator and other platforms
+      // Default for iOS simulator and other platforms
       return 'ws://localhost:9083';
     }
   }
@@ -523,27 +529,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (kIsWeb) {
       try {
         // Call our interop layer
-        initWebAudio();
-        webAudioInitialized = true;
-        log('Web Audio API initialized');
+        webAudioInitialized = initWebAudio(); // Store the result
+        log('Web Audio API initialization attempt: $webAudioInitialized');
       } catch (e) {
-        log('Error initializing Web Audio API: $e');
-      }
-    }
-  }
-
-  void _playWebAudio(String base64Audio) {
-    if (kIsWeb) {
-      try {
-        playWebAudio(base64Audio);
-        log('Audio passed to Web Audio API for playback');
-      } catch (e) {
-        log('Error playing audio on web: $e');
+        log('Error calling initWebAudio interop: $e');
+        webAudioInitialized = false;
       }
     }
   }
 
   Future<void> _initAudioSession() async {
+    if (kIsWeb) return; // Skip for web
     try {
       log('Initializing audio session...');
       final session = await AudioSession.instance;
@@ -573,6 +569,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
+  // --- Recording Logic ---
   void _startSilenceDetection() {
     silenceTimer?.cancel();
     silentSeconds = 0;
@@ -591,6 +588,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   // Helper method to show permission alert with option to open settings
   void _showPermissionAlert(BuildContext context) {
+    if (!mounted) return; // Check if the widget is still in the tree
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -645,9 +643,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     bool hasPermission = await record.hasPermission();
     if (!hasPermission) {
       log('Microphone permission not granted');
-
-      // Show an alert with option to open settings
-      _showPermissionAlert(context);
+      if (mounted) _showPermissionAlert(context); // Show an alert
       return; // Don't proceed if permission is denied
     }
     // --- End Permission Check ---
@@ -701,7 +697,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           },
           onError: (error) {
             log('Stream error: $error');
-            setState(() => isRecording = false);
+            if (mounted) setState(() => isRecording = false);
             sendTimer?.cancel();
             silenceTimer?.cancel();
           },
@@ -710,208 +706,21 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             sendTimer?.cancel();
             silenceTimer?.cancel();
             if (audioBuffer.isNotEmpty) sendBufferedAudio();
-            setState(() => isRecording = false);
+            if (mounted) setState(() => isRecording = false);
           },
         );
-
-        setState(() => isRecording = true);
+        if (mounted) setState(() => isRecording = true);
       } catch (e) {
         log('Error starting recording stream: $e');
-        setState(() => serverResponse = "Error starting recording.");
+        if (mounted) {
+          setState(() => serverResponse = "Error starting recording.");
+        }
         return; // Stop if stream fails to start
       }
     } else {
       log(
         'Already recording.',
       ); // Handle case where button is pressed while recording
-    }
-  }
-
-  void _listenForAudioStream() {
-    channel.stream.listen(
-      (message) {
-        try {
-          var data = jsonDecode(message as String);
-
-          // Handle text messages
-          if (data['text'] != null) {
-            setState(() => serverResponse = "Text: ${data['text']}");
-            log('Received text: ${data['text']}');
-          }
-          // Handle audio_start signal
-          else if (data['audio_start'] == true) {
-            log('Received audio_start signal - preparing for audio playback');
-            setState(() {
-              isAiSpeaking = true;
-              _tempPcmBuffer.clear(); // Clear any leftover audio
-            });
-            _lastAudioChunkTime = DateTime.now();
-          }
-          // Handle audio chunks - buffer them for later playback
-          else if (data['audio'] != null) {
-            String base64Audio = data['audio'] as String;
-
-            // Decode and buffer the audio chunk instead of playing immediately
-            var pcmBytes = base64Decode(base64Audio);
-            _tempPcmBuffer.addAll(pcmBytes);
-
-            // Update last chunk time
-            _lastAudioChunkTime = DateTime.now();
-
-            log(
-              'Buffered audio: ${pcmBytes.length} bytes, Total buffered: ${_tempPcmBuffer.length}',
-            );
-
-            // Reset speaking timeout - if we stop receiving chunks for 1.5 seconds, assume speaking is done
-            _speakingTimeoutTimer?.cancel();
-            _speakingTimeoutTimer = Timer(const Duration(milliseconds: 1500), () {
-              if (isAiSpeaking &&
-                  _lastAudioChunkTime != null &&
-                  DateTime.now()
-                          .difference(_lastAudioChunkTime!)
-                          .inMilliseconds >
-                      1400) {
-                log(
-                  'No audio chunks received for 1.5 seconds, assuming AI is done speaking',
-                );
-
-                // If we haven't received a turn_complete but we have buffered audio,
-                // play the buffered audio now
-                if (_tempPcmBuffer.isNotEmpty) {
-                  log(
-                    'Playing buffered audio after timeout (${_tempPcmBuffer.length} bytes)',
-                  );
-                  _playBufferedAudio();
-                }
-
-                setState(() {
-                  isAiSpeaking = false;
-                });
-              }
-            });
-          }
-          // Handle turn_complete flag - play all buffered audio
-          else if (data['turn_complete'] == true) {
-            log('Turn complete signal received');
-
-            // Play the entire buffered audio when the turn is complete
-            if (_tempPcmBuffer.isNotEmpty) {
-              log(
-                'Turn complete: Playing buffered audio (${_tempPcmBuffer.length} bytes)',
-              );
-              _playBufferedAudio();
-            }
-
-            // Cancel the speaking timeout timer
-            _speakingTimeoutTimer?.cancel();
-
-            // Update UI state after a short delay to ensure all audio is played
-            Future.delayed(const Duration(milliseconds: 500), () {
-              setState(() {
-                isAiSpeaking = false;
-              });
-            });
-          }
-        } catch (e) {
-          log('Decoding error: $e, message: $message');
-        }
-      },
-      onError: (error) {
-        log('WebSocket error: $error');
-        setState(() {
-          connectionStatus = 'Connection error: $error';
-          isAiSpeaking = false;
-        });
-      },
-      onDone: () {
-        log('WebSocket closed');
-        setState(() {
-          connectionStatus = 'Connection closed';
-          isAiSpeaking = false;
-        });
-      },
-    );
-  }
-
-  // New helper method to play all buffered audio
-  void _playBufferedAudio() {
-    if (_tempPcmBuffer.isEmpty) return;
-
-    if (kIsWeb) {
-      // For web, encode the entire buffer back to base64 and play it
-      String combinedBase64 = base64Encode(_tempPcmBuffer);
-      _playCombinedWebAudio(combinedBase64);
-    } else {
-      // For mobile, ensure PCM player is ready
-      if (!isSetup) {
-        _setupPcmSound().then((_) {
-          // Feed the entire buffered data at once
-          _feedAudioData(List<int>.from(_tempPcmBuffer));
-        });
-      } else {
-        // Feed the entire buffered data at once
-        _feedAudioData(List<int>.from(_tempPcmBuffer));
-      }
-    }
-
-    // Clear the buffer after playing
-    _tempPcmBuffer.clear();
-  }
-
-  // New helper method for web to play combined audio
-  void _playCombinedWebAudio(String base64Audio) {
-    if (kIsWeb) {
-      try {
-        // Using existing web audio playback function
-        playWebAudio(base64Audio);
-        log('Combined audio passed to Web Audio API for playback');
-      } catch (e) {
-        log('Error playing combined audio on web: $e');
-      }
-    }
-  }
-
-  Future<void> _setupPcmSound() async {
-    if (kIsWeb) return; // Skip for web platform
-
-    try {
-      if (!isSetup) {
-        log('Setting up PCM sound player...');
-        FlutterPcmSound.setFeedCallback(_onFeed);
-        // Match the sample rate with Gemini's output (usually 24000Hz)
-        // This is different from the recording sample rate (16000Hz) but that's expected
-        await FlutterPcmSound.setup(sampleRate: 24000, channelCount: 1);
-        log('PCM sound setup complete with sample rate 24000Hz');
-        isSetup = true;
-        log('PCM sound player initialized successfully');
-      }
-    } catch (e) {
-      log('PCM Sound setup error: $e');
-    }
-  }
-
-  void _onFeed(int remainingFrames) {
-    if (kIsWeb) return; // Skip for web platform
-
-    if (_pcmData.isNotEmpty) {
-      final feedSize = _pcmData.length > 8000 ? 8000 : _pcmData.length;
-      final frame = _pcmData.sublist(0, feedSize);
-      try {
-        FlutterPcmSound.feed(PcmArrayInt16.fromList(frame));
-        _pcmData.removeRange(0, feedSize);
-        log('Fed $feedSize samples, remaining: ${_pcmData.length}');
-      } catch (e) {
-        log('Error feeding PCM frame: $e');
-      }
-    } else {
-      try {
-        FlutterPcmSound.feed(
-          PcmArrayInt16.fromList(List.filled(8000, 0)),
-        ); // Feed silence if no data
-        log('Fed silence');
-      } catch (e) {
-        log('Error feeding silence: $e');
-      }
     }
   }
 
@@ -947,19 +756,328 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     sendTimer?.cancel();
     if (audioBuffer.isNotEmpty) sendBufferedAudio();
     log('Recording stopped');
+    if (mounted) {
+      setState(() => isRecording = false); // Update state when stopped
+    }
   }
 
-  // New helper method to directly feed audio data to the audio player
-  void _feedAudioData(List<int> pcmBytes) {
-    try {
-      FlutterPcmSound.feed(
-        PcmArrayInt16(
-          bytes: ByteData.view(Uint8List.fromList(pcmBytes).buffer),
-        ),
+  // --- Playback Logic ---
+  void _listenForAudioStream() {
+    channel.stream.listen(
+      (message) {
+        try {
+          var data = jsonDecode(message as String);
+
+          // Handle text messages
+          if (data['text'] != null) {
+            if (mounted) {
+              setState(
+                () => serverResponse = "${data['text']}",
+              ); // Removed "Text:" prefix
+            }
+            log('Received text: ${data['text']}');
+          }
+          // Handle audio_start signal
+          else if (data['audio_start'] == true) {
+            log('Received audio_start signal - preparing for audio playback');
+            if (mounted) {
+              setState(() {
+                isAiSpeaking = true;
+                _tempPcmBuffer.clear(); // Clear temp buffer for new response
+                if (!kIsWeb) {
+                  // Clear playback buffer for Android callback only when new audio starts
+                  _playbackPcmData.clear();
+                  log('Cleared Android playback buffer (_playbackPcmData)');
+                }
+              });
+            }
+            _lastAudioChunkTime = DateTime.now();
+          }
+          // Handle audio chunks - buffer them for later playback
+          else if (data['audio'] != null) {
+            String base64Audio = data['audio'] as String;
+
+            // Decode and buffer the audio chunk into the temporary buffer
+            var pcmBytes = base64Decode(base64Audio);
+            _tempPcmBuffer.addAll(pcmBytes);
+
+            // Update last chunk time
+            _lastAudioChunkTime = DateTime.now();
+
+            log(
+              'Buffered audio chunk: ${pcmBytes.length} bytes, Total temp buffered: ${_tempPcmBuffer.length}',
+            );
+
+            // Reset speaking timeout - if we stop receiving chunks for 1.5 seconds, assume speaking is done
+            _speakingTimeoutTimer?.cancel();
+            _speakingTimeoutTimer = Timer(const Duration(milliseconds: 1500), () {
+              if (isAiSpeaking &&
+                  _lastAudioChunkTime != null &&
+                  DateTime.now()
+                          .difference(_lastAudioChunkTime!)
+                          .inMilliseconds >
+                      1400) {
+                log(
+                  'No audio chunks received for 1.5 seconds, assuming AI is done speaking',
+                );
+
+                // If we haven't received a turn_complete but we have buffered audio,
+                // play the buffered audio now
+                if (_tempPcmBuffer.isNotEmpty) {
+                  log(
+                    'Playing buffered audio after timeout (${_tempPcmBuffer.length} bytes)',
+                  );
+                  _playBufferedAudio();
+                }
+
+                if (mounted) {
+                  setState(() {
+                    isAiSpeaking = false;
+                  });
+                }
+              }
+            });
+          }
+          // Handle turn_complete flag - play all buffered audio
+          else if (data['turn_complete'] == true) {
+            log('Turn complete signal received');
+
+            // Play the entire buffered audio when the turn is complete
+            if (_tempPcmBuffer.isNotEmpty) {
+              log(
+                'Turn complete: Playing buffered audio (${_tempPcmBuffer.length} bytes)',
+              );
+              _playBufferedAudio(); // This now handles platform specifics
+            } else {
+              log('Turn complete received, but no audio was buffered.');
+              // Even if no audio, mark AI as not speaking
+              if (mounted) {
+                setState(() {
+                  isAiSpeaking = false;
+                });
+              }
+            }
+
+            // Cancel the speaking timeout timer
+            _speakingTimeoutTimer?.cancel();
+
+            // Update UI state after a potential delay (adjust if needed)
+            // Using a shorter delay or no delay might be fine depending on playback speed
+            // Future.delayed(const Duration(milliseconds: 100), () {
+            // Ensure state is updated even if buffer was empty
+            if (!isAiSpeaking && mounted) {
+              setState(() {
+                isAiSpeaking = false;
+              });
+            }
+
+            // });
+          }
+        } catch (e) {
+          log('Decoding error: $e, message: $message');
+        }
+      },
+      onError: (error) {
+        log('WebSocket error: $error');
+        if (mounted) {
+          setState(() {
+            connectionStatus = 'Connection error: $error';
+            isAiSpeaking = false; // Reset speaking state on error
+            isRecording = false; // Reset recording state on error
+            isConnecting =
+                true; // Attempt to reconnect or indicate disconnected state
+          });
+        }
+        // Optionally attempt reconnection here
+        // _initConnection(); // Be careful with immediate reconnection loops
+      },
+      onDone: () {
+        log('WebSocket closed');
+        if (mounted) {
+          setState(() {
+            connectionStatus = 'Connection closed';
+            isAiSpeaking = false; // Reset speaking state
+            isRecording = false; // Reset recording state
+            isConnecting =
+                true; // Indicate disconnected state, maybe trigger reconnect button
+          });
+        }
+      },
+    );
+  }
+
+  // Play all buffered audio using platform-specific method
+  void _playBufferedAudio() {
+    if (_tempPcmBuffer.isEmpty) return;
+
+    final List<int> audioToPlay = List<int>.from(_tempPcmBuffer);
+    _tempPcmBuffer.clear(); // Clear the temporary buffer immediately
+
+    if (kIsWeb) {
+      // --- Web Playback ---
+      if (!webAudioInitialized) {
+        log('Web audio not initialized, attempting now...');
+        _initWebAudio(); // Try initializing again
+        if (!webAudioInitialized) {
+          log('Failed to initialize web audio, cannot play.');
+          if (mounted) {
+            setState(() => isAiSpeaking = false); // Ensure UI updates
+          }
+          return;
+        }
+      }
+      // Encode the entire buffer back to base64 and play it via JS interop
+      String combinedBase64 = base64Encode(audioToPlay);
+      try {
+        playWebAudio(combinedBase64); // Call the JS interop function
+        log(
+          'Combined audio passed to Web Audio API for playback (${audioToPlay.length} bytes)',
+        );
+      } catch (e) {
+        log('Error playing combined audio on web: $e');
+      } finally {
+        // Assume web playback finishes relatively quickly or handles its own state
+        if (mounted) {
+          setState(() => isAiSpeaking = false);
+        }
+      }
+    } else {
+      // --- Android/iOS Playback (Callback Method) ---
+      if (!_isPcmPlayerSetup) {
+        log('Android/iOS PCM player not setup, cannot play.');
+        if (mounted) {
+          setState(() => isAiSpeaking = false); // Ensure UI updates
+        }
+        return;
+      }
+
+      // Add the buffered audio to the playback queue for the callback
+      _playbackPcmData.addAll(audioToPlay);
+      log(
+        'Added ${audioToPlay.length} bytes to Android playback buffer. Total: ${_playbackPcmData.length}',
       );
-      log('PCM data fed directly: ${pcmBytes.length} bytes');
+
+      // Start playback if not already started (the callback will handle feeding)
+      if (!kIsWeb) {
+        // Ensure this block is only for non-web
+        try {
+          FlutterPcmSound.start(); // This call is now guarded by !kIsWeb
+          log('Ensured FlutterPcmSound is started for callback.');
+        } catch (e) {
+          log('Error ensuring FlutterPcmSound start: $e');
+        }
+      }
+
+      // Note: We don't set isAiSpeaking = false here for Android.
+      // It should ideally be set when the _playbackPcmData buffer becomes empty
+      // or after a reasonable timeout in the callback/feed mechanism if needed.
+      // For simplicity, we might rely on the next 'turn_complete' or timeout for UI update.
+      // Or, add logic to _onFeed to set isAiSpeaking = false when _playbackPcmData is empty.
+    }
+  }
+
+  // Setup FlutterPcmSound for Android/iOS
+  Future<void> _setupPcmSound() async {
+    // This initial check correctly prevents execution on web
+    if (kIsWeb || _isPcmPlayerSetup) return;
+
+    try {
+      log('Setting up PCM sound player (Android/iOS)...');
+      // These calls are now implicitly guarded by the !kIsWeb check above
+      FlutterPcmSound.setFeedCallback(_onFeed);
+      await FlutterPcmSound.setup(sampleRate: 24000, channelCount: 1);
+      _isPcmPlayerSetup = true;
+      log('PCM sound player initialized successfully (24000Hz)');
     } catch (e) {
-      log('Error feeding PCM data: $e');
+      log('PCM Sound setup error: $e');
+      _isPcmPlayerSetup = false; // Ensure setup status is correct on error
+    }
+  }
+
+  // Callback for flutter_pcm_sound (Android/iOS)
+  void _onFeed(int remainingFrames) {
+    // Add a top-level check for safety, although it should only be called when !kIsWeb
+    if (kIsWeb) return;
+
+    // Determine feed size (adjust buffer size as needed, e.g., 4096 or 8192 bytes = 2048 or 4096 frames)
+    const int feedSizeBytes = 8000; // 4000 frames (int16) = 8000 bytes
+    int feedSizeSamples = feedSizeBytes ~/ 2; // Samples (frames)
+
+    if (_playbackPcmData.isNotEmpty) {
+      final int bytesToFeed =
+          _playbackPcmData.length > feedSizeBytes
+              ? feedSizeBytes
+              : _playbackPcmData.length;
+      // Ensure bytesToFeed is an even number for Int16 conversion
+      final int actualBytesToFeed =
+          (bytesToFeed % 2 == 0) ? bytesToFeed : bytesToFeed - 1;
+
+      if (actualBytesToFeed <= 0) {
+        log('Feed size became zero or negative, feeding silence.');
+        try {
+          // Guard PcmArrayInt16 usage
+          FlutterPcmSound.feed(
+            PcmArrayInt16.fromList(List.filled(feedSizeSamples, 0)),
+          );
+        } catch (e) {
+          log('Error feeding silence (zero/neg size): $e');
+        }
+        if (_playbackPcmData.isNotEmpty) {
+          _playbackPcmData.clear(); // Clear remaining odd byte if any
+        }
+        if (mounted) {
+          setState(
+            () => isAiSpeaking = false,
+          ); // Buffer empty, stop speaking indicator
+        }
+        return;
+      }
+
+      // Extract the exact number of bytes to feed
+      final frameBytes = _playbackPcmData.sublist(0, actualBytesToFeed);
+      try {
+        // Guard PcmArrayInt16 usage
+        FlutterPcmSound.feed(
+          PcmArrayInt16(
+            bytes: ByteData.view(Uint8List.fromList(frameBytes).buffer),
+          ),
+        );
+        _playbackPcmData.removeRange(0, actualBytesToFeed);
+        log(
+          'Fed $actualBytesToFeed bytes, remaining: ${_playbackPcmData.length}',
+        );
+      } catch (e) {
+        log('Error feeding PCM frame: $e');
+        // Consider clearing buffer or stopping on error?
+        _playbackPcmData.clear(); // Clear buffer on feed error
+        if (mounted) {
+          setState(() => isAiSpeaking = false);
+        }
+      }
+    } else {
+      // Buffer is empty, feed silence
+      try {
+        // Guard PcmArrayInt16 usage
+        FlutterPcmSound.feed(
+          PcmArrayInt16.fromList(List.filled(feedSizeSamples, 0)),
+        );
+        log('Fed silence (buffer empty)');
+        // If the buffer is empty, the AI is no longer speaking
+        if (isAiSpeaking && mounted) {
+          setState(() => isAiSpeaking = false);
+        }
+      } catch (e) {
+        log('Error feeding silence (buffer empty): $e');
+      }
     }
   }
 }
+
+// --- Helper for Dynamic FlutterPcmSound Calls ---
+// This avoids direct static calls that cause issues on the web.
+// You might place this outside the class or in a separate utility file.
+// Note: This is a workaround. Proper conditional imports and platform checks
+// are generally preferred.
+
+// We use `as dynamic` directly within the methods where needed,
+// avoiding the need for a separate helper class here.
