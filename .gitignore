@@ -46,3 +46,5 @@ windows/flutter/generated_plugin_registrant.*
 
 # Uploaded content
 Server/uploads/ 
+translationapp/macos/Flutter/GeneratedPluginRegistrant.swift
+translationapp/android/app/src/main/AndroidManifest.xml

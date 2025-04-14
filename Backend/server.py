@@ -35,26 +35,48 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
         config_message = await client_websocket.recv()
         config_data = json.loads(config_message)
         config = config_data.get("setup", {})
-        
-        # Ensure we have system instructions for translation
+
+        # Ensure we have system instructions for translation (REPLACED BLOCK)
         if "system_instruction" not in config:
             config["system_instruction"] = {
                 "parts": [{
-                    "text": "You are a helpful bilingual assistant that translates between English and Spanish. " +
-                            "You are also a helpful assistant that will listen and respond to questions either in english or spanish and teach the user how to respond back." +
-                            "When you receive input in English, respond in Spanish. " +
-                            "When you receive input in Spanish, respond in English. " +
-                            "Always include the translation of what was said in your response."
+                    "text": """You are NativeFlow, a friendly and helpful multilingual language assistant, live translator, and tutor. Listen carefully to the user's request spoken in their language.
+
+1.  **Identify User's Goal:** Determine if the user wants to:
+    * Translate a phrase from their language *into* another language (e.g., "How do I say 'thank you' in Vietnamese?").
+    * Understand the meaning of a phrase spoken in a foreign language *in English* (e.g., User speaks Vietnamese: "Cảm ơn nghĩa là gì?").
+    * Get help with pronunciation (e.g., "Can you say that again slowly?").
+
+2.  **Translation (User Language -> Target Language):**
+    * Identify the user's original language and the target language.
+    * Identify the phrase to translate.
+    * Respond naturally in the user's original language.
+    * Clearly provide the translation (text and audio) in the target language.
+    * Offer brief context or pronunciation guidance if helpful.
+
+3.  **Translation (Foreign Language -> English):**
+    * Identify the foreign language phrase spoken by the user.
+    * Recognize the request is for the English meaning.
+    * Respond *in English*, providing the clear English translation (text and audio).
+
+4.  **Pronunciation Assistance:**
+    * If the user asks you to repeat a translation slowly (e.g., "Say that again slowly," "Can you repeat that?", "Slow down"), repeat *only* the translated phrase from the previous turn.
+    * Speak the repeated phrase clearly and at a noticeably slower pace, enunciating carefully to help the user learn. Avoid adding extra conversational text during the slow repetition.
+
+Your primary goal is to be a seamless live translation and language learning assistant, responding accurately and helpfully to the user's specific needs with clear text and natural-sounding spoken audio (including slowed-down audio for pronunciation)."""
                 }]
             }
-        
+        # Note: The config["generation_config"]["language"] = "en" line below this
+        # usually sets the *initial* language Gemini might expect or default to,
+        # but the system instruction above should override the rigid swapping behavior.
+
         # Add language preference to the configuration
         if "generation_config" not in config:
             config["generation_config"] = {}
-        
+
         # Set English as the default language
         config["generation_config"]["language"] = "en"
-         
+
         async with client.aio.live.connect(model=MODEL, config=config) as session:
             print("Connected to Gemini API")
 
@@ -69,10 +91,10 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
                                   if chunk["mime_type"] == "audio/pcm":
                                       save_pcm_as_mp3(base64.b64decode(chunk["data"]),16000, filename="user_input_to_server.mp3")
                                       await session.send({"mime_type": "audio/pcm", "data": chunk["data"]})
-                                      
+
                                   elif chunk["mime_type"] == "image/jpeg":
                                       await session.send({"mime_type": "image/jpeg", "data": chunk["data"]})
-                                      
+
                       except Exception as e:
                           print(f"Error sending to Gemini: {e}")
                   print("Client connection closed (send)")
@@ -85,7 +107,7 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
                 """Receives responses from the Gemini API and forwards them to the client."""
                 try:
                     audio_start_sent = False
-                    
+
                     while True:
                         try:
                             accumulated_audio_this_turn = b'' # Accumulate audio for this turn only
@@ -104,7 +126,7 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
                                         await client_websocket.send(json.dumps({"audio_start": True}))
                                         audio_start_sent = True
                                         print("Sent audio_start signal")
-                                        
+
                                     for part in model_turn.parts:
                                         if hasattr(part, 'text') and part.text is not None:
                                             await client_websocket.send(json.dumps({"text": part.text}))
@@ -112,26 +134,26 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
                                         elif hasattr(part, 'inline_data') and part.inline_data is not None:
                                             print("audio mime_type:", part.inline_data.mime_type)
                                             base64_audio = base64.b64encode(part.inline_data.data).decode('utf-8')
-                                            
+
                                             await client_websocket.send(json.dumps({"audio": base64_audio}))
-                                            
+
                                             # Accumulate the audio data for this turn
                                             accumulated_audio_this_turn += part.inline_data.data
-                                            
+
                                             print(f"Sent audio chunk: {len(part.inline_data.data)} bytes")
 
                                 # Check turn_complete after processing parts
                                 if response.server_content.turn_complete:
                                     print('\n<Turn complete signal received from Gemini>')
                                     turn_was_completed = True
-                                    
+
                                     # Send turn_complete signal to Flutter immediately
                                     await client_websocket.send(json.dumps({"turn_complete": True}))
                                     print("Sent turn_complete signal to client")
-                                    
+
                                     # Reset for next turn
                                     audio_start_sent = False
-                                    
+
                                     # Perform transcription after signaling turn_complete
                                     if accumulated_audio_this_turn:
                                         print(f"Attempting transcription for {len(accumulated_audio_this_turn)} bytes...")
