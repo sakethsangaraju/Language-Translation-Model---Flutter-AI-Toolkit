@@ -48,3 +48,7 @@ windows/flutter/generated_plugin_registrant.*
 Server/uploads/ 
 translationapp/macos/Flutter/GeneratedPluginRegistrant.swift
 translationapp/android/app/src/main/AndroidManifest.xml
+translationapp/macos/Flutter/GeneratedPluginRegistrant.swift
+translationapp/linux/flutter/generated_plugins.cmake
+translationapp/linux/flutter/generated_plugin_registrant.h
+translationapp/linux/flutter/generated_plugin_registrant.cc
