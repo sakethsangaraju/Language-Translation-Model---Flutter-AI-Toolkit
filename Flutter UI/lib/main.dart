@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-import 'dart:js_util' as js_util;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:logger/logger.dart';
-// For HTML interop
+// We need to continue using the old libraries until the codebase is fully migrated
+import 'dart:js_util' as js_util;
 import 'dart:html' as html;
 import 'dart:js' as js;
 import 'package:flutter_animate/flutter_animate.dart';
@@ -52,22 +51,18 @@ class GeminiLiveScreen extends StatefulWidget {
 class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
   final Logger logger = Logger();
   bool _audioWorkletInitialized = false;
-  dynamic _audioCtx;
-  dynamic _workletNode;
   html.WebSocket? _webSocket;
   // For webcam and audio recording
   html.VideoElement? _videoElement;
   html.CanvasElement? _canvasElement;
   html.MediaStream? _videoStream;
-  String? _currentScreenshotBase64;
   bool _webcamViewRegistered = false;
   // For recording state
   bool _isRecording = false;
   // For chat messages
-  List<ChatMessage> _chatMessages = [];
+  final List<ChatMessage> _chatMessages = [];
   // For audio processing
   Timer? _audioChunkTimer;
-  List<int> _pcmData = [];
   bool _webSocketConnected = false;
   // UI transition state
   bool _usingFlutterUI = false;
@@ -104,9 +99,10 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
       var audioContext = js_util.getProperty(windowObj, 'audioContext');
       if (audioContext == null) {
         // Retrieve AudioContext constructor (or webkitAudioContext for compatibility).
-        var AudioContext = js_util.getProperty(windowObj, 'AudioContext') ??
-            js_util.getProperty(windowObj, 'webkitAudioContext');
-        audioContext = js_util.callConstructor(AudioContext, [
+        var audioContextClass =
+            js_util.getProperty(windowObj, 'AudioContext') ??
+                js_util.getProperty(windowObj, 'webkitAudioContext');
+        audioContext = js_util.callConstructor(audioContextClass, [
           js_util.jsify({'sampleRate': 24000})
         ]);
         js_util.setProperty(windowObj, 'audioContext', audioContext);
@@ -127,8 +123,6 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
 
       // Store the node globally if needed.
       js_util.setProperty(windowObj, 'workletNode', workletNode);
-      _audioCtx = audioContext;
-      _workletNode = workletNode;
 
       _audioWorkletInitialized = true;
       logger.i('AudioWorklet initialized successfully');
@@ -142,8 +136,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
   void _setupVideoElement() {
     try {
       // Check if video element already exists
-      _videoElement =
-          html.document.getElementById('videoElement') as html.VideoElement?;
+      _videoElement = html.window.document.getElementById('videoElement')
+          as html.VideoElement?;
 
       if (_videoElement == null) {
         // Create new if it doesn't exist
@@ -219,9 +213,6 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
       _canvasElement!.width = _videoElement!.videoWidth;
       _canvasElement!.height = _videoElement!.videoHeight;
       _canvasElement!.context2D.drawImage(_videoElement!, 0, 0);
-
-      final dataUrl = _canvasElement!.toDataUrl('image/jpeg');
-      _currentScreenshotBase64 = dataUrl.split(',')[1].trim();
     } catch (e) {
       logger.e('Error capturing image: $e');
     }
@@ -231,13 +222,13 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
   void _initializeJSBridge() {
     try {
       // Debug JS errors
-      js.context.callMethod('eval', [
+      js_util.callMethod(js.context, 'eval', [
         'window.onerror = function(message, source, lineno, colno, error) { console.log("JS ERROR:", message, "at", source, lineno, colno, error); }'
       ]);
 
       // Initialize the bridge
-      final result =
-          js.context.callMethod('eval', ['window.flutterBridge.initialize()']);
+      final result = js_util.callMethod(
+          js.context, 'eval', ['window.flutterBridge.initialize()']);
       logger.i('Flutter bridge initialized: $result');
     } catch (e) {
       logger.e('Error initializing JS bridge: $e');
@@ -266,12 +257,12 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
       }));
 
       // Register with the bridge
-      js.context.callMethod('eval', [
+      js_util.callMethod(js.context, 'eval', [
         'window.flutterBridge.registerCallback("onChatMessage", function(text, isUser) { return window.onChatMessage(text, isUser); })'
       ]);
 
       // Register the callback with the bridge
-      js.context.callMethod('eval',
+      js_util.callMethod(js.context, 'eval',
           ['window.flutterBridge.registerChatCallback("onChatMessage")']);
 
       logger.i('Chat callback registered');
@@ -285,8 +276,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
     if (!kIsWeb) return;
 
     try {
-      final isConnected = js.context
-          .callMethod('eval', ['window.flutterBridge.isWebSocketConnected()']);
+      final isConnected = js_util.callMethod(
+          js.context, 'eval', ['window.flutterBridge.isWebSocketConnected()']);
 
       setState(() {
         _webSocketConnected = isConnected == true;
@@ -309,8 +300,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
       }
 
       // Add debug statement to console to track progress
-      js.context.callMethod(
-          'eval', ['console.log("Activating Flutter UI from Dart")']);
+      js_util.callMethod(js.context, 'eval',
+          ['console.log("Activating Flutter UI from Dart")']);
 
       // Make video element visible
       if (_videoElement != null) {
@@ -321,8 +312,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
       }
 
       // Handle UI transition via JS bridge
-      final result = js.context
-          .callMethod('eval', ['window.flutterBridge.activateFlutterUI()']);
+      final result = js_util.callMethod(
+          js.context, 'eval', ['window.flutterBridge.activateFlutterUI()']);
 
       if (result == true) {
         setState(() {
@@ -339,7 +330,7 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
     } catch (e) {
       logger.e('Error activating Flutter UI: $e');
       // Add debug output to console
-      js.context.callMethod('eval', [
+      js_util.callMethod(js.context, 'eval', [
         'console.error("Error activating Flutter UI:", ${jsonEncode(e.toString())})'
       ]);
     }
@@ -350,8 +341,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
     if (!kIsWeb) return;
 
     try {
-      final isConnected = js.context
-          .callMethod('eval', ['window.flutterBridge.isWebSocketConnected()']);
+      final isConnected = js_util.callMethod(
+          js.context, 'eval', ['window.flutterBridge.isWebSocketConnected()']);
 
       setState(() {
         _webSocketConnected = isConnected == true;
@@ -366,8 +357,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
     if (!kIsWeb || _isRecording) return;
 
     try {
-      final result = js.context
-          .callMethod('eval', ['window.flutterBridge.startAudioRecording()']);
+      final result = js_util.callMethod(
+          js.context, 'eval', ['window.flutterBridge.startAudioRecording()']);
 
       if (result == true) {
         setState(() {
@@ -385,8 +376,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
     if (!kIsWeb || !_isRecording) return;
 
     try {
-      final result = js.context
-          .callMethod('eval', ['window.flutterBridge.stopAudioRecording()']);
+      final result = js_util.callMethod(
+          js.context, 'eval', ['window.flutterBridge.stopAudioRecording()']);
 
       if (result == true) {
         setState(() {
@@ -415,7 +406,7 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
       _addUserMessage(text);
 
       // Send to Gemini via JS bridge
-      final result = js.context.callMethod('eval',
+      final result = js_util.callMethod(js.context, 'eval',
           ['window.flutterBridge.sendTextMessage(${jsonEncode(text)})']);
 
       if (result != true) {
@@ -445,7 +436,7 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
         title: const Text('Gemini Live Demo')
             .animate()
             .fadeIn(duration: 500.ms)
-            .shimmer(duration: 1200.ms, color: Colors.white.withOpacity(0.8)),
+            .shimmer(duration: 1200.ms, color: Colors.white.withAlpha(204)),
         backgroundColor: Colors.indigo,
         actions: [
           Chip(
@@ -462,7 +453,7 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
                     boxShadow: [
                       BoxShadow(
                         color: (_webSocketConnected ? Colors.green : Colors.red)
-                            .withOpacity(0.3 * value),
+                            .withAlpha((0.3 * value * 255).toInt()),
                         blurRadius: 8 * value,
                         spreadRadius: 2 * value,
                       ),
@@ -596,13 +587,14 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
                                           shape: BoxShape.circle,
                                           boxShadow: [
                                             BoxShadow(
-                                              color: Colors.red.withOpacity(
-                                                  0.5 *
+                                              color: Colors.red.withAlpha((0.5 *
                                                       (0.5 +
                                                           math.sin(value *
                                                                   math.pi *
                                                                   2) /
-                                                              2)),
+                                                              2) *
+                                                      255)
+                                                  .toInt()),
                                               blurRadius: 12,
                                               spreadRadius: 2,
                                             ),
@@ -637,7 +629,7 @@ class ChatMessage {
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
 
-  const ChatBubble({Key? key, required this.message}) : super(key: key);
+  const ChatBubble({super.key, required this.message});
 
   @override
   Widget build(BuildContext context) {
