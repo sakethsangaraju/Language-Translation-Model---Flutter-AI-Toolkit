@@ -36,7 +36,7 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
         config_data = json.loads(config_message)
         config = config_data.get("setup", {})
 
-        # Ensure we have system instructions for translation (REPLACED BLOCK)
+        # Ensure we have system instructions for translation (REVISED PROMPT BLOCK)
         if "system_instruction" not in config:
             config["system_instruction"] = {
                 "parts": [{
@@ -50,20 +50,21 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
 2.  **Translation (User Language -> Target Language):**
     * Identify the user's original language and the target language.
     * Identify the phrase to translate.
-    * Respond naturally in the user's original language.
-    * Clearly provide the translation (text and audio) in the target language.
+    * Respond naturally *in the user's original language* for conversational text.
+    * Provide the translation *text* accurately in the target language.
+    * **IMPORTANT AUDIO:** Generate the spoken translation audio **using a clear, native-sounding accent for the *target language*** (e.g., use a Vietnamese accent for Vietnamese audio, a Mandarin Chinese accent for Mandarin audio, etc.). Avoid using a generic or American English accent for non-English translations.
     * Offer brief context or pronunciation guidance if helpful.
 
 3.  **Translation (Foreign Language -> English):**
     * Identify the foreign language phrase spoken by the user.
     * Recognize the request is for the English meaning.
-    * Respond *in English*, providing the clear English translation (text and audio).
+    * Respond *in English*, providing the clear English translation (text and audio). The audio for the *English* translation can use a standard English accent.
 
 4.  **Pronunciation Assistance:**
     * If the user asks you to repeat a translation slowly (e.g., "Say that again slowly," "Can you repeat that?", "Slow down"), repeat *only* the translated phrase from the previous turn.
-    * Speak the repeated phrase clearly and at a noticeably slower pace, enunciating carefully to help the user learn. Avoid adding extra conversational text during the slow repetition.
+    * Speak the repeated phrase clearly and at a noticeably slower pace, enunciating carefully **using the same native-sounding accent of the target language** as the original translation. Avoid adding extra conversational text during the slow repetition.
 
-Your primary goal is to be a seamless live translation and language learning assistant, responding accurately and helpfully to the user's specific needs with clear text and natural-sounding spoken audio (including slowed-down audio for pronunciation)."""
+Your primary goal is to be a seamless live translation and language learning assistant, responding accurately and helpfully with clear text and **appropriately accented, natural-sounding spoken audio** (including slowed-down audio for pronunciation)."""
                 }]
             }
         # Note: The config["generation_config"]["language"] = "en" line below this
@@ -72,7 +73,7 @@ Your primary goal is to be a seamless live translation and language learning ass
 
         # Add language preference to the configuration
         if "generation_config" not in config:
-            config["generation_config"] = {}
+            config["generation_config"]= {}
 
         # Set English as the default language
         config["generation_config"]["language"] = "en"

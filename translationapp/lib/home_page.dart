@@ -79,7 +79,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Track if the PCM player (Android) is set up
   bool _isPcmPlayerSetup = false; // Renamed from isSetup for clarity
   // --- End Playback State ---
-
   // Add a timer to detect silence in audio stream
   Timer? _audioSilenceTimer;
 
@@ -618,16 +617,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   // Open app settings - this will work for both iOS and Android
   void _openAppSettings() async {
-    if (kIsWeb) return; // Not applicable for web
+    if (kIsWeb) return; // Not for web
 
     try {
       // You would typically use a plugin like app_settings or permission_handler
       // For this example, we'll just log the action
       log('Opening app settings (would normally use app_settings package)');
 
-      // If you add the package, the code would look like:
-      // import 'package:app_settings/app_settings.dart';
-      // AppSettings.openAppSettings();
     } catch (e) {
       log('Error opening settings: $e');
     }
@@ -860,11 +856,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
             // Cancel the speaking timeout timer
             _speakingTimeoutTimer?.cancel();
-
-            // Update UI state after a potential delay (adjust if needed)
-            // Using a shorter delay or no delay might be fine depending on playback speed
-            // Future.delayed(const Duration(milliseconds: 100), () {
-            // Ensure state is updated even if buffer was empty
             if (!isAiSpeaking && mounted) {
               setState(() {
                 isAiSpeaking = false;
@@ -968,11 +959,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         }
       }
 
-      // Note: We don't set isAiSpeaking = false here for Android.
+      // Note: don't set isAiSpeaking = false here for Android.
       // It should ideally be set when the _playbackPcmData buffer becomes empty
       // or after a reasonable timeout in the callback/feed mechanism if needed.
-      // For simplicity, we might rely on the next 'turn_complete' or timeout for UI update.
-      // Or, add logic to _onFeed to set isAiSpeaking = false when _playbackPcmData is empty.
+      // For simplicitysake here we could rely on the next turn_complete or timeout for UI update
     }
   }
 
@@ -993,7 +983,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       _isPcmPlayerSetup = false; // Ensure setup status is correct on error
     }
   }
-
   // Callback for flutter_pcm_sound (Android/iOS)
   void _onFeed(int remainingFrames) {
     // Add a top-level check for safety, although it should only be called when !kIsWeb
@@ -1073,11 +1062,4 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 }
 
-// --- Helper for Dynamic FlutterPcmSound Calls ---
-// This avoids direct static calls that cause issues on the web.
-// You might place this outside the class or in a separate utility file.
-// Note: This is a workaround. Proper conditional imports and platform checks
-// are generally preferred.
 
-// We use `as dynamic` directly within the methods where needed,
-// avoiding the need for a separate helper class here.
