@@ -54,3 +54,5 @@ Flutter UI/linux/flutter/generated_plugins.cmake
 Flutter UI/linux/flutter/ephemeral/.plugin_symlinks/file_selector_linux
 Flutter UI/linux/flutter/ephemeral/.plugin_symlinks/path_provider_linux
 Flutter UI/macos/Flutter/GeneratedPluginRegistrant.swift
+audio_clips/
+audio_clips
