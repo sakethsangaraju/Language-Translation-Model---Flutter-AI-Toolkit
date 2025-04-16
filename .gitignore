@@ -1,0 +1,60 @@
+Backend/.env
+# Flutter/Dart specific
+.dart_tool/
+.packages
+pubspec.lock
+
+# Build outputs
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# Flutter generated files
+.flutter-plugins
+.flutter-plugins-dependencies
+.flutter-versions
+
+# Platform-specific generated files
+
+## iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework/
+ios/Flutter/Flutter.podspec
+ios/Runner/GeneratedPluginRegistrant.*
+
+## Android
+android/.gradle/
+android/app/build/
+android/local.properties
+
+## macOS
+macos/Flutter/ephemeral/
+macos/Pods/
+
+## Linux
+linux/flutter/ephemeral/
+
+## Windows
+windows/flutter/generated_plugin_registrant.*
+
+# Uploaded images (if not required to be tracked)
+Server/uploads/
+
+# Ignore environment variables
+.env
+*.env
+*.mp3
+Backend/.env
+Flutter UI/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+Flutter UI/ios/Runner/GeneratedPluginRegistrant.m
+Flutter UI/linux/flutter/generated_plugin_registrant.cc
+Flutter UI/linux/flutter/generated_plugins.cmake
+Flutter UI/linux/flutter/ephemeral/.plugin_symlinks/file_selector_linux
+Flutter UI/linux/flutter/ephemeral/.plugin_symlinks/path_provider_linux
+Flutter UI/macos/Flutter/GeneratedPluginRegistrant.swift
+audio_clips/
+audio_clips

@@ -165,7 +165,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           final stream = await record.startStream( const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1), );
           audioBuffer.clear();
           sendTimer?.cancel();
-          sendTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+          sendTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
             if (audioBuffer.isNotEmpty) sendBufferedAudio();
              if (mounted) setState(() => silentSeconds = 0);
           });
