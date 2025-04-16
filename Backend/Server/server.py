@@ -8,18 +8,59 @@ import io
 from pydub import AudioSegment
 import google.generativeai as generative
 import wave
+from dotenv import load_dotenv
 
-# Load API key from environment
-os.environ['GOOGLE_API_KEY'] = ''
-generative.configure(api_key=os.environ['GOOGLE_API_KEY'])
-MODEL = "gemini-2.0-flash-exp"  # use your model ID
-TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"
+# Load environment variables
+load_dotenv()
 
+# Initialize global counter for audio chunks
+user_chunk_counter = 0
+
+# Get API key from environment
+api_key = os.getenv('GOOGLE_API_KEY')
+if not api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable is not set")
+
+os.environ['GOOGLE_API_KEY'] = api_key
+generative.configure(api_key=api_key)
+MODEL = "gemini-2.0-flash-exp"   # Latest stable Flash model for general use
+TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"  # Same model for transcription
 client = genai.Client(
   http_options={
     'api_version': 'v1alpha',
   }
 )
+
+# Function to save PCM data as MP3
+def save_pcm_as_mp3(pcm_data, sample_rate=16000, filename="output.mp3"):
+    """Saves PCM audio data as an MP3 file."""
+    try:
+        # Create a WAV in memory
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # mono
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm_data)
+        
+        # Reset buffer position
+        wav_buffer.seek(0)
+        
+        # Convert WAV to MP3
+        audio_segment = AudioSegment.from_wav(wav_buffer)
+        
+        # Ensure directory exists
+        os.makedirs("audio_clips", exist_ok=True)
+        file_path = os.path.join("audio_clips", filename)
+        
+        # Export as MP3
+        audio_segment.export(file_path, format="mp3", codec="libmp3lame")
+        print(f"Saved audio clip to {file_path}")
+        return True
+        
+    except Exception as e:
+        print(f"Error saving PCM as MP3: {e}")
+        return False
 
 async def gemini_session_handler(client_websocket: websockets.WebSocketServerProtocol):
     """Handles the interaction with Gemini API within a websocket session."""
@@ -32,11 +73,31 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
         if "system_instruction" not in config:
             config["system_instruction"] = {
                 "parts": [{
-                    "text": "You are a helpful bilingual assistant that translates between English and Spanish. " +
-                            "You are also a helpful assistant that will listen and respond to questions either in english or spanish and teach the user how to respond back." +
-                            "When you receive input in English, respond in Spanish. " +
-                            "When you receive input in Spanish, respond in English. " +
-                            "Always include the translation of what was said in your response."
+                    "text": """You are NativeFlow, a friendly and helpful multilingual language assistant, live translator, and tutor. Listen carefully to the user's request spoken in their language.
+
+1.  **Identify User's Goal:** Determine if the user wants to:
+    * Translate a phrase from their language *into* another language (e.g., "How do I say 'thank you' in Vietnamese?").
+    * Understand the meaning of a phrase spoken in a foreign language *in English* (e.g., User speaks Vietnamese: "Cảm ơn nghĩa là gì?").
+    * Get help with pronunciation (e.g., "Can you say that again slowly?").
+
+2.  **Translation (User Language -> Target Language):**
+    * Identify the user's original language and the target language.
+    * Identify the phrase to translate.
+    * Respond naturally *in the user's original language* for conversational text.
+    * Provide the translation *text* accurately in the target language.
+    * **IMPORTANT AUDIO:** Generate the spoken translation audio **using a clear, native-sounding accent for the *target language*** (e.g., use a Vietnamese accent for Vietnamese audio, a Mandarin Chinese accent for Mandarin audio, etc.). Avoid using a generic or American English accent for non-English translations.
+    * Offer brief context or pronunciation guidance if helpful.
+
+3.  **Translation (Foreign Language -> English):**
+    * Identify the foreign language phrase spoken by the user.
+    * Recognize the request is for the English meaning.
+    * Respond *in English*, providing the clear English translation (text and audio). The audio for the *English* translation can use a standard English accent.
+
+4.  **Pronunciation Assistance:**
+    * If the user asks you to repeat a translation slowly (e.g., "Say that again slowly," "Can you repeat that?", "Slow down"), repeat *only* the translated phrase from the previous turn.
+    * Speak the repeated phrase clearly and at a noticeably slower pace, enunciating carefully **using the same native-sounding accent of the target language** as the original translation. Avoid adding extra conversational text during the slow repetition.
+
+Your primary goal is to be a seamless live translation and language learning assistant, responding accurately and helpfully with clear text and **appropriately accented, natural-sounding spoken audio** (including slowed-down audio for pronunciation)."""
                 }]
             }
         
@@ -51,26 +112,50 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
             print("Connected to Gemini API")
 
             async def send_to_gemini():
-                """Sends messages from the client websocket to the Gemini API."""
+                global user_chunk_counter
+                """Sends messages (audio or text) from the client websocket to the Gemini API."""
                 try:
                   async for message in client_websocket:
                       try:
                           data = json.loads(message)
-                          if "realtime_input" in data:
+
+                          if "text_input" in data and "text" in data["text_input"]:
+                              user_text = data["text_input"]["text"]
+                              print(f"Received text input from client: {user_text}")
+                              await session.send({"text": user_text})
+                              print(f"Sent text to Gemini: {user_text}")
+                              user_chunk_counter = 0
+
+                          elif "realtime_input" in data:
                               for chunk in data["realtime_input"]["media_chunks"]:
                                   if chunk["mime_type"] == "audio/pcm":
-                                      await session.send({"mime_type": "audio/pcm", "data": chunk["data"]})
-                                      
+                                      user_chunk_counter += 1
+                                      chunk_filename = f"user_input_chunk_{user_chunk_counter}.mp3"
+                                      decoded_data = base64.b64decode(chunk["data"]) # Decode once
+                                      save_pcm_as_mp3(
+                                          decoded_data,
+                                          16000,
+                                          filename=chunk_filename
+                                      )
+                                      await session.send({"mime_type": "audio/pcm", "data": decoded_data})
+
                                   elif chunk["mime_type"] == "image/jpeg":
-                                      await session.send({"mime_type": "image/jpeg", "data": chunk["data"]})
-                                      
+                                       decoded_data = base64.b64decode(chunk["data"]) # Decode once
+                                       await session.send({"mime_type": "image/jpeg", "data": decoded_data})
+
+                      except json.JSONDecodeError:
+                           print(f"Received non-JSON message: {message}")
                       except Exception as e:
-                          print(f"Error sending to Gemini: {e}")
+                          print(f"Error processing client message: {e}")
+
                   print("Client connection closed (send)")
+                except websockets.exceptions.ConnectionClosedOK:
+                     print("Client connection closed normally (send loop)")
                 except Exception as e:
-                     print(f"Error sending to Gemini: {e}")
+                     # Print the specific error during send
+                     print(f"Error sending to Gemini: {e}") # This will now show the original error if it persists
                 finally:
-                   print("send_to_gemini closed")
+                   print("send_to_gemini task finished")
 
 
 
