@@ -1,255 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="A new Flutter project.">
 
-  <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="translationapp">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-  <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
   <title>NativeFlow</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- Improved Web Audio API Script for Real-time Streaming -->
-  <script>
-    // Initialize Web Audio context and variables
-    let audioContext;
-    let initialized = false;
-    let audioQueue = [];
-    let isPlaying = false;
-    let lastChunkTime = 0;
-    let compressor;
-    let mediaStreamDestination;
-    let audioElement;
-    let streamingMode = true; // Enable streaming mode by default
-    
-    // Keep track of chunks to prevent duplicates (using a simple hash-like approach)
-    let recentChunkHashes = new Set();
-    const MAX_RECENT_CHUNKS = 100; // Maximum number of recent chunks to track
-    
-    // Try to initialize automatically, but browsers might block this
-    document.addEventListener('DOMContentLoaded', function() {
-      // Try to initialize, but it might not work without user gesture
-      tryInitAudio();
-      
-      // Add a click listener to the document to init on first click
-      document.addEventListener('click', function() {
-        if (!initialized) {
-          tryInitAudio();
-        }
-      }, { once: true });
-    });
-    
-    // Function to handle initialization attempts
-    function tryInitAudio() {
-      if (initialized) return true;
-      
-      try {
-        window.AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioContext = new AudioContext({sampleRate: 24000});
-        
-        // Set up audio processing chain for better sound quality
-        compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -15;
-        compressor.knee.value = 10;
-        compressor.ratio.value = 3;
-        compressor.attack.value = 0.03;
-        compressor.release.value = 0.25;
-        compressor.connect(audioContext.destination);
-        
-        // Set up media stream if needed for continuous audio
-        mediaStreamDestination = audioContext.createMediaStreamDestination();
-        compressor.connect(mediaStreamDestination);
-        
-        // Create audio element for streaming if needed
-        audioElement = document.createElement('audio');
-        audioElement.style.display = 'none';
-        document.body.appendChild(audioElement);
-        
-        initialized = true;
-        console.log("Web Audio API initialized successfully");
-        return true;
-      } catch (e) {
-        console.error("Web Audio API initialization failed:", e);
-        return false;
-      }
-    }
-    
-    // Initialize audio and play (or queue for later)
-    function initWebAudio() {
-      return tryInitAudio();
-    }
-    
-    // Generate a simple hash for a chunk to detect duplicates
-    function simpleHash(data, length) {
-      if (length < 10) return "empty"; // Too small to hash
-      
-      // Sample a few bytes from different parts of the data
-      // This is a very simple approach but should work for our needs
-      let hash = "";
-      const samples = [0, Math.floor(length/3), Math.floor(2*length/3), length-1];
-      for (let pos of samples) {
-        hash += data.charCodeAt(pos).toString(16);
-      }
-      return hash + "-" + length;
-    }
-    
-    // Add chunk hash to recent set and remove old ones if needed
-    function trackChunk(hash) {
-      recentChunkHashes.add(hash);
-      
-      // Clean up old hashes if we have too many
-      if (recentChunkHashes.size > MAX_RECENT_CHUNKS) {
-        const iterator = recentChunkHashes.values();
-        recentChunkHashes.delete(iterator.next().value); // Remove oldest
-      }
-    }
-    
-    // Check if we've seen this chunk before
-    function isDuplicateChunk(hash) {
-      return recentChunkHashes.has(hash);
-    }
-    
-    // Play PCM audio from a base64 encoded string - optimized for streaming
-    async function playPcmAudioStreaming(base64Data) {
-      // If not initialized, try to initialize
-      if (!initialized && !tryInitAudio()) {
-        console.log("Cannot play audio - Web Audio API not initialized");
-        return;
-      }
-
-      // *** FIX: Check and Resume AudioContext if suspended ***
-      if (audioContext.state === 'suspended') {
-        console.log("AudioContext is suspended, attempting to resume...");
-        try {
-          await audioContext.resume(); // Use await as resume() returns a Promise
-          console.log("AudioContext resumed successfully.");
-        } catch (resumeError) {
-          console.error("Failed to resume AudioContext:", resumeError);
-          // Optionally, notify the user or try again later
-          return; // Stop if we can't resume
-        }
-      }
-      // *** End Fix ***
-
-      // Check if context is running now
-      if (audioContext.state !== 'running') {
-         console.log("AudioContext is not running, cannot play audio. State:", audioContext.state);
-         return;
-      }
-
-      try {
-        // Get current time earlier for both timing and gap detection
-        const now = audioContext.currentTime;
-        const gapTime = now - lastChunkTime;
-
-        // *** FIX: Clear duplicate hashes if it's likely a new response ***
-        if (gapTime > 0.5) { // Use the same threshold as the fade-in logic
-          console.log("Significant gap detected, clearing recent chunk hashes.");
-          recentChunkHashes.clear(); // Clear the set for the new response
-        }
-        // *** End Fix ***
-
-        // Check for duplicate chunks (after potentially clearing the set)
-        const chunkHash = simpleHash(base64Data, base64Data.length);
-        if (isDuplicateChunk(chunkHash)) {
-          console.log("Skipping duplicate audio chunk");
-          return;
-        }
-
-        // Track this chunk to prevent duplicates
-        trackChunk(chunkHash);
-
-        // Decode base64 to binary
-        const binaryString = window.atob(base64Data);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // Skip tiny chunks (likely empty or incomplete)
-        if (len < 100) {
-          console.log("Skipping very small audio chunk:", len);
-          return;
-        }
-
-        // Convert bytes to Int16Array (PCM format)
-        const pcmData = new Int16Array(bytes.buffer);
-
-        // Convert Int16 PCM to Float32 (required by Web Audio API)
-        const audioData = new Float32Array(pcmData.length);
-        for (let i = 0; i < pcmData.length; i++) {
-          // Convert from int16 to float32 (-1.0 to 1.0 range)
-          audioData[i] = pcmData[i] / 32768.0;
-        }
-
-        // Create audio buffer
-        const audioBuffer = audioContext.createBuffer(1, audioData.length, 24000); // Ensure sample rate matches context
-        audioBuffer.copyToChannel(audioData, 0);
-
-        // Create and play audio source
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-
-        // Add a gain node to control volume
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 1.0;
-
-        // Connect the audio processing chain
-        source.connect(gainNode);
-        gainNode.connect(compressor); // Assuming 'compressor' is still valid
-
-        // Smooth transition between chunks
-        // (gapTime already calculated at the top of the function)
-        
-        // If it's been longer than 0.5 seconds since the last chunk,
-        // fade in to avoid clicks/pops
-        if (gapTime > 0.5) {
-          gainNode.gain.setValueAtTime(0, now);
-          gainNode.gain.linearRampToValueAtTime(1.0, now + 0.05);
-        }
-
-        // Start playback
-        source.start(now); // Start immediately relative to context time
-        lastChunkTime = now + (audioBuffer.duration || 0.1); // Update last chunk time based on current time
-
-        console.log("Playing audio chunk, length:", audioData.length, "at time:", now);
-      } catch (e) {
-        console.error("Error playing streaming audio:", e);
-      }
-    }
-    
-    // Ensure the original function also calls the modified streaming one
-    function playPcmAudio(base64Data) {
-      playPcmAudioStreaming(base64Data); // Calls the potentially async function
-    }
-  </script>
-</head>
+  </head>
 <body>
-  <!-- This script injects the Flutter initialization JS -->
+
+  <script src="assets/packages/flutter_soloud/web/libflutter_soloud_plugin.js" defer></script>
+  <script src="assets/packages/flutter_soloud/web/init_module.dart.js" defer></script>
+
   <script src="flutter_bootstrap.js" async></script>
+
 </body>
 </html>

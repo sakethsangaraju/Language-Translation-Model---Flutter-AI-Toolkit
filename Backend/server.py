@@ -138,7 +138,7 @@ Your primary goal is to be a seamless live translation and language learning ass
 
                                             await client_websocket.send(json.dumps({"audio": base64_audio}))
 
-                                            # Accumulate the audio data for this turn
+                                            # get the audio data after this turn 
                                             accumulated_audio_this_turn += part.inline_data.data
 
                                             print(f"Sent audio chunk: {len(part.inline_data.data)} bytes")

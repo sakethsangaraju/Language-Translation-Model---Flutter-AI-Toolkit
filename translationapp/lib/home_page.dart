@@ -1,20 +1,19 @@
-import 'dart:developer';
-import 'package:flutter/material.dart';
-import 'package:record/record.dart';
-import 'dart:convert';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:developer';
 import 'dart:typed_data';
-// Import flutter_pcm_sound only for non-web platforms
-import 'package:flutter_pcm_sound/flutter_pcm_sound.dart'
-    if (dart.library.html) 'web_dummy.dart';
-import 'package:audio_session/audio_session.dart';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
-// Only import js for web platforms
-import 'js_interop.dart';
+import 'dart:io';
 
-// Define theme colors based on NativeFlow logo (Assuming NativeFlowTheme class exists)
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/material.dart';
+import 'package:flutter_soloud/flutter_soloud.dart'; // Import SoLoud
+import 'package:record/record.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:flutter_animate/flutter_animate.dart'; // Keep for animations
+import 'package:path_provider/path_provider.dart';
+
+// Define theme colors (assuming NativeFlowTheme class exists)
 class NativeFlowTheme {
   static const Color primaryBlue = Color(0xFF4D96FF);
   static const Color accentPurple = Color(0xFF5C33FF);
@@ -41,17 +40,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late WebSocketChannel channel;
   final record = AudioRecorder();
   bool isRecording = false;
-  List<int> audioBuffer = [];
+  List<int> audioBuffer = []; // Buffer for recording
   Timer? sendTimer;
   Timer? silenceTimer;
   String serverResponse = '';
   bool isConnecting = true;
   String connectionStatus = 'Connecting to server...';
-  bool webAudioInitialized = false;
   bool isAiSpeaking = false;
   int silentSeconds = 0;
 
-  // Animation controllers
+  // Animation controllers (Keep all animation logic)
   late AnimationController _logoAnimationController;
   late AnimationController _buttonScaleController;
   late AnimationController _buttonSlideController;
@@ -60,7 +58,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late AnimationController _speakingAnimationController;
   late AnimationController _progressAnimationController;
 
-  // Animations
+  // Animations (Keep all animation logic)
   late Animation<double> _logoFadeAnimation;
   late Animation<Offset> _logoSlideAnimation;
   late Animation<double> _buttonScaleAnimation;
@@ -71,16 +69,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late Animation<double> _speakingScaleAnimation;
   late Animation<double> _progressFadeAnimation;
 
-  // --- Playback State ---
-  // Use _playbackPcmData for the Android callback feeding mechanism
-  final List<int> _playbackPcmData = [];
-  // Temporary buffer for accumulating chunks before playing (used by both platforms)
-  final List<int> _tempPcmBuffer = [];
-  // Track if the PCM player (Android) is set up
-  bool _isPcmPlayerSetup = false; // Renamed from isSetup for clarity
-  // --- End Playback State ---
-  // Add a timer to detect silence in audio stream
-  Timer? _audioSilenceTimer;
+  // --- Playback State (Using flutter_soloud) ---
+  final List<int> _pcmBuffer =
+      []; // Buffer for incoming audio bytes from server
+  AudioSource? currentSound;
+  StreamSubscription? _audioEventSubscription;
+  SoundHandle? _currentSoundHandle; // To track the currently playing sound
 
   // Add a timeout timer for audio streaming
   Timer? _speakingTimeoutTimer;
@@ -90,47 +84,40 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
 
-    // Initialize animation controllers
+    // Initialize animation controllers (Keep existing animation init)
     _logoAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-
     _buttonScaleController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
-
     _buttonSlideController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
     );
-
     _statusAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
-
     _micIconController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
-
     _speakingAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 700),
     )..repeat(reverse: true);
-
     _progressAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat();
 
-    // Set up animations
+    // Set up animations (Keep existing animation setup)
     _logoFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _logoAnimationController, curve: Curves.easeOut),
     );
-
     _logoSlideAnimation = Tween<Offset>(
       begin: const Offset(-0.2, 0.0),
       end: Offset.zero,
@@ -140,14 +127,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         curve: Curves.easeOutQuad,
       ),
     );
-
     _buttonScaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
       CurvedAnimation(
         parent: _buttonScaleController,
         curve: Curves.easeInOutCubic,
       ),
     );
-
     _buttonSlideAnimation = Tween<Offset>(
       begin: const Offset(0.0, 0.5),
       end: Offset.zero,
@@ -157,14 +142,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         curve: Curves.easeOutQuad,
       ),
     );
-
     _statusFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _statusAnimationController,
         curve: Curves.easeOut,
       ),
     );
-
     _statusSlideAnimation = Tween<Offset>(
       begin: const Offset(0.0, 0.2),
       end: Offset.zero,
@@ -174,18 +157,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         curve: Curves.easeOutQuad,
       ),
     );
-
     _micIconScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
       CurvedAnimation(parent: _micIconController, curve: Curves.easeInOut),
     );
-
     _speakingScaleAnimation = Tween<double>(begin: 0.9, end: 1.1).animate(
       CurvedAnimation(
         parent: _speakingAnimationController,
         curve: Curves.easeInOut,
       ),
     );
-
     _progressFadeAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(
         parent: _progressAnimationController,
@@ -193,26 +173,47 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       ),
     );
 
-    // Start animations
+    // Start animations (Keep existing animation start)
     _logoAnimationController.forward();
     _buttonSlideController.forward();
     _statusAnimationController.forward();
 
-    // Add a listener to update AI speaking status after audio chunks stop coming
-    // This ensures UI updates if we don't get a turn_complete signal
-    _speakingTimeoutTimer = Timer(Duration.zero, () {});
+    // Timer for speaking timeout
+    _speakingTimeoutTimer = Timer(
+      Duration.zero,
+      () {},
+    ); // Initialize dummy timer
 
-    _initConnection();
+    // Initialize SoLoud for all platforms
+    _initSoLoud();
+  }
 
-    // Try to initialize web audio immediately
-    if (kIsWeb) {
-      _initWebAudio();
+  Future<void> _initSoLoud() async {
+    setState(() {
+      isConnecting = true;
+      connectionStatus = 'Initializing Audio Engine...';
+    });
+
+    try {
+      // Initialize SoLoud with proper parameters for the platform
+      await SoLoud.instance.init();
+
+      log('SoLoud initialized successfully');
+
+      // Now proceed with WebSocket connection
+      _initConnection();
+    } catch (e) {
+      log('Error initializing SoLoud: $e');
+      setState(() {
+        connectionStatus = 'Audio Engine Failed: $e';
+        isConnecting = false;
+      });
     }
   }
 
   @override
   void dispose() {
-    // Dispose animation controllers
+    // Dispose animation controllers (Keep existing)
     _logoAnimationController.dispose();
     _buttonScaleController.dispose();
     _buttonSlideController.dispose();
@@ -221,30 +222,48 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _speakingAnimationController.dispose();
     _progressAnimationController.dispose();
 
+    // Cancel timers
     silenceTimer?.cancel();
     sendTimer?.cancel();
-    _audioSilenceTimer?.cancel();
     _speakingTimeoutTimer?.cancel();
+    _audioEventSubscription?.cancel(); // Cancel SoLoud event listener
 
-    if (isRecording) stopStream();
-    record.dispose();
-    channel.sink.close();
-
-    // Dispose FlutterPcmSound resources only if not on web and if setup
-    if (!kIsWeb && _isPcmPlayerSetup) {
+    // Stop recording if active
+    if (isRecording)
+      stopStream();
+    else {
       try {
-        // Now FlutterPcmSound is only referenced inside the non-web block
-        FlutterPcmSound.release();
-        log('FlutterPcmSound released');
+        // Only close the channel if it exists
+        channel.sink.close();
       } catch (e) {
-        log('Error releasing FlutterPcmSound: $e');
+        log("Error closing WebSocket channel: $e");
+      }
+    }
+    record.dispose();
+
+    // Clean up SoLoud resources
+    if (currentSound != null) {
+      try {
+        SoLoud.instance.disposeSource(currentSound!);
+      } catch (e) {
+        log('Error disposing sound source: $e');
       }
     }
 
+    // Make sure any active sound is stopped
+    if (_currentSoundHandle != null) {
+      try {
+        SoLoud.instance.stop(_currentSoundHandle!);
+      } catch (e) {
+        log('Error stopping sound: $e');
+      }
+    }
+
+    log('HomePage disposed');
     super.dispose();
-    log('Disposed');
   }
 
+  // --- UI Widgets (Keep existing: _recordingButton, _buildLogo, _buildStatusMessage, build method) ---
   @override
   void didUpdateWidget(HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -283,7 +302,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             isRecording
                 ? Icons.stop
                 : isAiSpeaking
-                ? Icons.hearing
+                ? Icons
+                    .hearing // Using 'hearing' icon for AI speaking
                 : Icons.mic,
             color: Colors.white,
           ),
@@ -341,6 +361,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ? NativeFlowTheme.primaryBlue
             : NativeFlowTheme.textDark;
 
+    // Trigger animation reset when message changes
+    if (message != serverResponse ||
+        isConnecting ||
+        isAiSpeaking ||
+        isRecording) {
+      if (_statusAnimationController.status == AnimationStatus.completed) {
+        _statusAnimationController.reset();
+        _statusAnimationController.forward();
+      }
+    }
+
     return FadeTransition(
       opacity: _statusFadeAnimation,
       child: SlideTransition(
@@ -378,10 +409,27 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    // Reset status animation when building with new status
-    if (_statusAnimationController.status == AnimationStatus.completed) {
-      _statusAnimationController.reset();
-      _statusAnimationController.forward();
+    // Ensure SoLoud is initialized before building the main UI
+    if (!SoLoud.instance.isInitialized && isConnecting) {
+      return Scaffold(
+        backgroundColor: NativeFlowTheme.backgroundGrey,
+        appBar: AppBar(
+          title: _buildLogo(),
+          elevation: 0,
+          backgroundColor: Colors.white,
+          centerTitle: true,
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 20),
+              Text(connectionStatus, style: const TextStyle(fontSize: 18)),
+            ],
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -404,7 +452,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              if (isConnecting)
+              // Show progress indicator only if connecting state is explicitly true
+              // (and not just because SoLoud is initializing)
+              if (isConnecting && SoLoud.instance.isInitialized)
                 FadeTransition(
                   opacity: _progressFadeAnimation,
                   child: const CircularProgressIndicator(),
@@ -419,7 +469,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: FadeTransition(
-                    opacity: const AlwaysStoppedAnimation(1.0),
+                    opacity: const AlwaysStoppedAnimation(1.0), // Simpler fade
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -471,104 +521,69 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   // --- Connection and Initialization ---
   void _initConnection() async {
+    if (!SoLoud.instance.isInitialized) {
+      log("Error: Attempted to connect before SoLoud was initialized.");
+      setState(() {
+        isConnecting = false; // Stop showing indefinite progress
+        connectionStatus = "Audio Engine Error.";
+      });
+      return;
+    }
+
     setState(() {
       isConnecting = true;
       connectionStatus = 'Connecting to server...';
     });
 
     try {
-      // Initialize audio session for mobile platforms
-      if (!kIsWeb) {
-        await _initAudioSession();
-      }
+      // No need for audio session or platform-specific setup here, SoLoud handles it.
 
-      // Different WebSocket URL based on platform
       final wsUrl = _getWebSocketUrl();
       log('Connecting to WebSocket URL: $wsUrl');
-
       channel = WebSocketChannel.connect(Uri.parse(wsUrl));
 
-      // Set up audio and listeners AFTER connection is established
-      // Setup PCM Sound only for Android/iOS
-      if (!kIsWeb) {
-        await _setupPcmSound();
-      }
-      // Listen for messages regardless of platform
+      // Listen for WebSocket messages
       _listenForAudioStream();
+
+      // Start listening to SoLoud player events AFTER initializing connection
+      _listenToSoLoudEvents();
 
       setState(() {
         isConnecting = false;
         connectionStatus = 'Connected';
+        // Ensure serverResponse is also cleared or set appropriately
+        serverResponse = '';
       });
 
-      log('WebSocket initialized successfully');
+      log('WebSocket connected successfully');
     } catch (e) {
       log('Error initializing connection: $e');
-      setState(() {
-        isConnecting = false;
-        connectionStatus = 'Connection failed: $e';
-      });
-    }
-  }
-
-  String _getWebSocketUrl() {
-    if (kIsWeb) {
-      // Use localhost for web development, adjust for production
-      return 'ws://localhost:9083';
-    } else if (Platform.isAndroid) {
-      // Special IP for Android emulator
-      return 'ws://10.0.2.2:9083';
-    } else {
-      // Default for iOS simulator and other platforms
-      return 'ws://localhost:9083';
-    }
-  }
-
-  void _initWebAudio() {
-    if (kIsWeb) {
-      try {
-        // Call our interop layer
-        webAudioInitialized = initWebAudio(); // Store the result
-        log('Web Audio API initialization attempt: $webAudioInitialized');
-      } catch (e) {
-        log('Error calling initWebAudio interop: $e');
-        webAudioInitialized = false;
+      if (mounted) {
+        setState(() {
+          isConnecting = false;
+          connectionStatus = 'Connection failed: $e';
+        });
       }
     }
   }
 
-  Future<void> _initAudioSession() async {
-    if (kIsWeb) return; // Skip for web
-    try {
-      log('Initializing audio session...');
-      final session = await AudioSession.instance;
-      await session.configure(
-        const AudioSessionConfiguration(
-          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions:
-              AVAudioSessionCategoryOptions.allowBluetooth,
-          avAudioSessionMode: AVAudioSessionMode.spokenAudio,
-          avAudioSessionRouteSharingPolicy:
-              AVAudioSessionRouteSharingPolicy.defaultPolicy,
-          avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-          androidAudioAttributes: AndroidAudioAttributes(
-            contentType: AndroidAudioContentType.speech,
-            flags: AndroidAudioFlags.none,
-            usage: AndroidAudioUsage.voiceCommunication,
-          ),
-          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-          androidWillPauseWhenDucked: true,
-        ),
-      );
-
-      await session.setActive(true);
-      log('Audio session initialized and active');
-    } catch (e) {
-      log('Failed to initialize audio session: $e');
+  // Keep _getWebSocketUrl as is
+  String _getWebSocketUrl() {
+    if (kIsWeb) {
+      // Use localhost for web development, adjust for production
+      return 'ws://localhost:9083';
+    } else if (defaultTargetPlatform == TargetPlatform.android) {
+      // Special IP for Android emulator
+      return 'ws://10.0.2.2:9083';
+    } else {
+      // Default for iOS simulator and other platforms (macOS, Windows, Linux)
+      return 'ws://localhost:9083';
     }
   }
 
-  // --- Recording Logic ---
+  // Remove _initWebAudio, _initAudioSession
+
+  // --- Recording Logic (Keep existing methods: _startSilenceDetection, _showPermissionAlert, _openAppSettings, sendJsonAudioStream, sendBufferedAudio, stopStream, stopRecordingOnly) ---
   void _startSilenceDetection() {
     silenceTimer?.cancel();
     silentSeconds = 0;
@@ -578,14 +593,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       if (silentSeconds >= 5) {
         log('5 seconds of silence detected - stopping recording');
-        stopRecordingOnly();
-        setState(() => isRecording = false);
+        stopRecordingOnly(); // Stop recording but keep socket open
+        if (mounted) setState(() => isRecording = false);
         silenceTimer?.cancel();
       }
     });
   }
 
-  // Helper method to show permission alert with option to open settings
   void _showPermissionAlert(BuildContext context) {
     if (!mounted) return; // Check if the widget is still in the tree
     showDialog(
@@ -615,18 +629,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // Open app settings - this will work for both iOS and Android
+  // Placeholder - use permission_handler or app_settings package for real implementation
   void _openAppSettings() async {
-    if (kIsWeb) return; // Not for web
-
-    try {
-      // You would typically use a plugin like app_settings or permission_handler
-      // For this example, we'll just log the action
-      log('Opening app settings (would normally use app_settings package)');
-
-    } catch (e) {
-      log('Error opening settings: $e');
-    }
+    log(
+      'Opening app settings (requires permission_handler or app_settings package)',
+    );
+    // Example using permission_handler (add dependency first):
+    // import 'package:permission_handler/permission_handler.dart';
+    // await openAppSettings();
   }
 
   void sendJsonAudioStream() async {
@@ -644,8 +654,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
     // --- End Permission Check ---
 
-    // Proceed with recording ONLY if permission is granted
     if (!isRecording) {
+      // Clear previous server response and audio buffer
+      setState(() {
+        serverResponse = '';
+      });
+      _pcmBuffer.clear(); // Clear playback buffer for new interaction
+      await SoLoud.instance.disposeAllSources(); // Stop any residual playback
+
       channel.sink.add(
         jsonEncode({
           "setup": {
@@ -656,27 +672,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       log('Config sent');
 
       try {
-        // Add try-catch around startStream
         final stream = await record.startStream(
           const RecordConfig(
-            encoder: AudioEncoder.pcm16bits,
-            sampleRate: 16000,
-            numChannels: 1,
+            encoder: AudioEncoder.pcm16bits, // Keep recording format
+            sampleRate: 16000, // Keep recording format
+            numChannels: 1, // Keep recording format
           ),
         );
 
-        audioBuffer.clear();
+        audioBuffer.clear(); // Clear recording buffer
         sendTimer?.cancel();
-
-        // Start the silence detection timer
-        _startSilenceDetection();
+        _startSilenceDetection(); // Start silence detection
 
         // Send data periodically
-        sendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        sendTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+          // Send more frequently
           if (audioBuffer.isNotEmpty) {
             sendBufferedAudio();
-            // Reset the silence timer when we send data
-            silentSeconds = 0;
+            silentSeconds = 0; // Reset silence timer on send
           }
         });
 
@@ -684,24 +697,22 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           (List<int> chunk) {
             if (chunk.isNotEmpty) {
               audioBuffer.addAll(chunk);
-              log(
-                'Buffered ${chunk.length} bytes, Total: ${audioBuffer.length}',
-              );
-              // Reset silence detection since we got audio
-              silentSeconds = 0;
+              // log('Buffered ${chunk.length} bytes, Total: ${audioBuffer.length}'); // Can be verbose
+              silentSeconds = 0; // Reset silence detection on receiving audio
             }
           },
           onError: (error) {
-            log('Stream error: $error');
+            log('Recording Stream error: $error');
             if (mounted) setState(() => isRecording = false);
             sendTimer?.cancel();
             silenceTimer?.cancel();
           },
           onDone: () {
-            log('Stream done');
+            log('Recording Stream done');
             sendTimer?.cancel();
             silenceTimer?.cancel();
-            if (audioBuffer.isNotEmpty) sendBufferedAudio();
+            if (audioBuffer.isNotEmpty)
+              sendBufferedAudio(); // Send any remaining audio
             if (mounted) setState(() => isRecording = false);
           },
         );
@@ -711,17 +722,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         if (mounted) {
           setState(() => serverResponse = "Error starting recording.");
         }
-        return; // Stop if stream fails to start
       }
     } else {
-      log(
-        'Already recording.',
-      ); // Handle case where button is pressed while recording
+      log('Stop recording pressed');
+      stopRecordingOnly(); // Stop recording
+      if (mounted) setState(() => isRecording = false);
     }
   }
 
   void sendBufferedAudio() {
-    if (audioBuffer.isNotEmpty) {
+    if (audioBuffer.isNotEmpty && channel.closeCode == null) {
+      // Check if channel is open
       String base64Audio = base64Encode(audioBuffer);
       channel.sink.add(
         jsonEncode({
@@ -732,32 +743,84 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           },
         }),
       );
-      log('Sent ${audioBuffer.length} bytes');
+      // log('Sent ${audioBuffer.length} bytes'); // Can be verbose
       audioBuffer.clear();
+    } else if (channel.closeCode != null) {
+      log('WebSocket closed, cannot send audio.');
+      // Stop recording if socket is closed
+      if (isRecording) {
+        stopRecordingOnly();
+        if (mounted) setState(() => isRecording = false);
+      }
     }
   }
 
+  // Keep stopStream (closes socket too)
   void stopStream() async {
     silenceTimer?.cancel();
-    await record.stop();
     sendTimer?.cancel();
-    if (audioBuffer.isNotEmpty) sendBufferedAudio();
-    channel.sink.close();
+    await record.stop();
+    if (audioBuffer.isNotEmpty)
+      sendBufferedAudio(); // Send final chunk if needed
+    channel.sink.close(); // Close WebSocket
     log('Stream & WebSocket closed');
+    if (mounted) setState(() => isRecording = false);
   }
 
+  // Keep stopRecordingOnly (stops recording, leaves socket open)
   void stopRecordingOnly() async {
     silenceTimer?.cancel();
-    await record.stop();
     sendTimer?.cancel();
-    if (audioBuffer.isNotEmpty) sendBufferedAudio();
+    await record.stop();
+    if (audioBuffer.isNotEmpty) sendBufferedAudio(); // Send final chunk
     log('Recording stopped');
-    if (mounted) {
-      setState(() => isRecording = false); // Update state when stopped
-    }
+    // Don't set isRecording = false here, handled by the calling method or onDone callback
   }
 
-  // --- Playback Logic ---
+  // --- Playback Logic (Using flutter_soloud) ---
+
+  void _listenToSoLoudEvents() {
+    _audioEventSubscription?.cancel();
+
+    // Create a simple timer to periodically check playback status
+    _audioEventSubscription = Stream.periodic(
+      const Duration(milliseconds: 500),
+    ).listen((_) {
+      // Only check if we have an active sound handle and we're in speaking state
+      if (_currentSoundHandle != null && isAiSpeaking) {
+        try {
+          // Only perform position check on non-web platforms
+          if (!kIsWeb) {
+            // Check playback position - exception will be thrown if sound is no longer playing
+            final position = SoLoud.instance.getPosition(_currentSoundHandle!);
+            log('Sound position: ${position.inMilliseconds}ms');
+
+            // If position is near the end (for very short sounds), consider it finished
+            if (position.inMilliseconds > 20000) {
+              if (mounted) {
+                setState(() {
+                  isAiSpeaking = false;
+                  _currentSoundHandle = null;
+                });
+              }
+              log('Sound playback completed (reached end)');
+            }
+          }
+        } catch (e) {
+          // Exception means sound is no longer playing (handle invalid)
+          if (mounted && isAiSpeaking) {
+            setState(() {
+              isAiSpeaking = false;
+              _currentSoundHandle = null;
+            });
+          }
+          log('Sound playback completed (handle invalid)');
+        }
+      }
+    });
+    log('Started periodic check for sound completion');
+  }
+
   void _listenForAudioStream() {
     channel.stream.listen(
       (message) {
@@ -767,299 +830,282 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           // Handle text messages
           if (data['text'] != null) {
             if (mounted) {
-              setState(
-                () => serverResponse = "${data['text']}",
-              ); // Removed "Text:" prefix
+              setState(() => serverResponse = "${data['text']}");
             }
             log('Received text: ${data['text']}');
           }
           // Handle audio_start signal
           else if (data['audio_start'] == true) {
-            log('Received audio_start signal - preparing for audio playback');
+            log('Received audio_start signal');
             if (mounted) {
               setState(() {
-                isAiSpeaking = true;
-                _tempPcmBuffer.clear(); // Clear temp buffer for new response
-                if (!kIsWeb) {
-                  // Clear playback buffer for Android callback only when new audio starts
-                  _playbackPcmData.clear();
-                  log('Cleared Android playback buffer (_playbackPcmData)');
-                }
+                isAiSpeaking = true; // Set speaking true *immediately*
+                _pcmBuffer.clear(); // Clear buffer for new response
               });
             }
             _lastAudioChunkTime = DateTime.now();
+            // Reset speaking timeout timer
+            _speakingTimeoutTimer?.cancel();
+            _startSpeakingTimeoutCheck(); // Start timeout check
           }
-          // Handle audio chunks - buffer them for later playback
+          // Handle audio chunks - buffer them
           else if (data['audio'] != null) {
             String base64Audio = data['audio'] as String;
-
-            // Decode and buffer the audio chunk into the temporary buffer
             var pcmBytes = base64Decode(base64Audio);
-            _tempPcmBuffer.addAll(pcmBytes);
+            _pcmBuffer.addAll(pcmBytes);
+            _lastAudioChunkTime = DateTime.now(); // Update time
+            // log('Buffered audio chunk: ${pcmBytes.length} bytes, Total buffered: ${_pcmBuffer.length}'); // Verbose
 
-            // Update last chunk time
-            _lastAudioChunkTime = DateTime.now();
-
-            log(
-              'Buffered audio chunk: ${pcmBytes.length} bytes, Total temp buffered: ${_tempPcmBuffer.length}',
-            );
-
-            // Reset speaking timeout - if we stop receiving chunks for 1.5 seconds, assume speaking is done
+            // Reset speaking timeout timer as we received a chunk
             _speakingTimeoutTimer?.cancel();
-            _speakingTimeoutTimer = Timer(const Duration(milliseconds: 1500), () {
-              if (isAiSpeaking &&
-                  _lastAudioChunkTime != null &&
-                  DateTime.now()
-                          .difference(_lastAudioChunkTime!)
-                          .inMilliseconds >
-                      1400) {
-                log(
-                  'No audio chunks received for 1.5 seconds, assuming AI is done speaking',
-                );
-
-                // If we haven't received a turn_complete but we have buffered audio,
-                // play the buffered audio now
-                if (_tempPcmBuffer.isNotEmpty) {
-                  log(
-                    'Playing buffered audio after timeout (${_tempPcmBuffer.length} bytes)',
-                  );
-                  _playBufferedAudio();
-                }
-
-                if (mounted) {
-                  setState(() {
-                    isAiSpeaking = false;
-                  });
-                }
-              }
-            });
+            _startSpeakingTimeoutCheck();
           }
           // Handle turn_complete flag - play all buffered audio
           else if (data['turn_complete'] == true) {
             log('Turn complete signal received');
+            _speakingTimeoutTimer?.cancel(); // Cancel timeout check
 
-            // Play the entire buffered audio when the turn is complete
-            if (_tempPcmBuffer.isNotEmpty) {
+            if (_pcmBuffer.isNotEmpty) {
               log(
-                'Turn complete: Playing buffered audio (${_tempPcmBuffer.length} bytes)',
+                'Turn complete: Playing buffered audio (${_pcmBuffer.length} bytes)',
               );
-              _playBufferedAudio(); // This now handles platform specifics
+              _playAudioWithSoloud(List<int>.from(_pcmBuffer)); // Play a copy
+              _pcmBuffer.clear(); // Clear buffer after copying
+              // isAiSpeaking will be set to false by the SoLoud event listener
             } else {
               log('Turn complete received, but no audio was buffered.');
-              // Even if no audio, mark AI as not speaking
-              if (mounted) {
-                setState(() {
-                  isAiSpeaking = false;
-                });
+              // No audio to play, so AI is done speaking
+              if (mounted && isAiSpeaking) {
+                // Only update if currently speaking
+                setState(() => isAiSpeaking = false);
               }
             }
-
-            // Cancel the speaking timeout timer
-            _speakingTimeoutTimer?.cancel();
-            if (!isAiSpeaking && mounted) {
-              setState(() {
-                isAiSpeaking = false;
-              });
-            }
-
-            // });
           }
-        } catch (e) {
-          log('Decoding error: $e, message: $message');
+        } catch (e, s) {
+          log(
+            'WebSocket message processing error: $e\n$s',
+            error: e,
+            stackTrace: s,
+          );
         }
       },
       onError: (error) {
         log('WebSocket error: $error');
         if (mounted) {
           setState(() {
-            connectionStatus = 'Connection error: $error';
-            isAiSpeaking = false; // Reset speaking state on error
-            isRecording = false; // Reset recording state on error
-            isConnecting =
-                true; // Attempt to reconnect or indicate disconnected state
+            connectionStatus = 'Connection error';
+            isAiSpeaking = false;
+            isRecording = false;
+            isConnecting = true; // Indicate disconnected state
           });
         }
-        // Optionally attempt reconnection here
-        // _initConnection(); // Be careful with immediate reconnection loops
+        // Consider adding reconnection logic here or a manual reconnect button
       },
       onDone: () {
         log('WebSocket closed');
         if (mounted) {
           setState(() {
             connectionStatus = 'Connection closed';
-            isAiSpeaking = false; // Reset speaking state
-            isRecording = false; // Reset recording state
-            isConnecting =
-                true; // Indicate disconnected state, maybe trigger reconnect button
+            isAiSpeaking = false;
+            isRecording = false;
+            isConnecting = true; // Indicate disconnected state
           });
         }
+        _speakingTimeoutTimer?.cancel(); // Cancel timeout on disconnect
+        try {
+          // Use stop method for all sounds instead of stopAll
+          if (_currentSoundHandle != null) {
+            SoLoud.instance.stop(_currentSoundHandle!);
+          }
+        } catch (e) {
+          log('Error stopping sounds: $e');
+        }
+        if (mounted && isAiSpeaking) setState(() => isAiSpeaking = false);
       },
     );
   }
 
-  // Play all buffered audio using platform-specific method
-  void _playBufferedAudio() {
-    if (_tempPcmBuffer.isEmpty) return;
-
-    final List<int> audioToPlay = List<int>.from(_tempPcmBuffer);
-    _tempPcmBuffer.clear(); // Clear the temporary buffer immediately
-
-    if (kIsWeb) {
-      // --- Web Playback ---
-      if (!webAudioInitialized) {
-        log('Web audio not initialized, attempting now...');
-        _initWebAudio(); // Try initializing again
-        if (!webAudioInitialized) {
-          log('Failed to initialize web audio, cannot play.');
-          if (mounted) {
-            setState(() => isAiSpeaking = false); // Ensure UI updates
-          }
-          return;
-        }
-      }
-      // Encode the entire buffer back to base64 and play it via JS interop
-      String combinedBase64 = base64Encode(audioToPlay);
-      try {
-        playWebAudio(combinedBase64); // Call the JS interop function
+  // Start the timer to check for speaking timeout
+  void _startSpeakingTimeoutCheck() {
+    _speakingTimeoutTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (isAiSpeaking &&
+          _lastAudioChunkTime != null &&
+          DateTime.now().difference(_lastAudioChunkTime!).inMilliseconds >
+              1400) {
         log(
-          'Combined audio passed to Web Audio API for playback (${audioToPlay.length} bytes)',
+          'No audio chunks received for 1.5 seconds, assuming AI is done speaking (Timeout)',
         );
-      } catch (e) {
-        log('Error playing combined audio on web: $e');
-      } finally {
-        // Assume web playback finishes relatively quickly or handles its own state
-        if (mounted) {
-          setState(() => isAiSpeaking = false);
+
+        // If we have buffered audio, play it now
+        if (_pcmBuffer.isNotEmpty) {
+          log(
+            'Playing buffered audio after timeout (${_pcmBuffer.length} bytes)',
+          );
+          _playAudioWithSoloud(List<int>.from(_pcmBuffer));
+          _pcmBuffer.clear();
+        } else {
+          // No audio buffered, just stop the speaking indicator
+          if (mounted && isAiSpeaking) {
+            setState(() {
+              isAiSpeaking = false;
+            });
+          }
         }
       }
-    } else {
-      // --- Android/iOS Playback (Callback Method) ---
-      if (!_isPcmPlayerSetup) {
-        log('Android/iOS PCM player not setup, cannot play.');
-        if (mounted) {
-          setState(() => isAiSpeaking = false); // Ensure UI updates
-        }
-        return;
-      }
-
-      // Add the buffered audio to the playback queue for the callback
-      _playbackPcmData.addAll(audioToPlay);
-      log(
-        'Added ${audioToPlay.length} bytes to Android playback buffer. Total: ${_playbackPcmData.length}',
-      );
-
-      // Start playback if not already started (the callback will handle feeding)
-      if (!kIsWeb) {
-        // Ensure this block is only for non-web
-        try {
-          FlutterPcmSound.start(); // This call is now guarded by !kIsWeb
-          log('Ensured FlutterPcmSound is started for callback.');
-        } catch (e) {
-          log('Error ensuring FlutterPcmSound start: $e');
-        }
-      }
-
-      // Note: don't set isAiSpeaking = false here for Android.
-      // It should ideally be set when the _playbackPcmData buffer becomes empty
-      // or after a reasonable timeout in the callback/feed mechanism if needed.
-      // For simplicitysake here we could rely on the next turn_complete or timeout for UI update
-    }
+    });
   }
 
-  // Setup FlutterPcmSound for Android/iOS
-  Future<void> _setupPcmSound() async {
-    // This initial check correctly prevents execution on web
-    if (kIsWeb || _isPcmPlayerSetup) return;
+  // Play buffered PCM audio using SoLoud by adding a WAV header
+  Future<void> _playAudioWithSoloud(List<int> pcmData) async {
+    if (!SoLoud.instance.isInitialized) {
+      log('Error: SoLoud not initialized, cannot play audio.');
+      if (mounted) setState(() => isAiSpeaking = false);
+      return;
+    }
+
+    if (pcmData.isEmpty) {
+      log('Warning: Attempted to play empty audio buffer.');
+      if (mounted) setState(() => isAiSpeaking = false);
+      return;
+    }
+
+    if (mounted && !isAiSpeaking) {
+      setState(() {
+        isAiSpeaking = true;
+      });
+    }
 
     try {
-      log('Setting up PCM sound player (Android/iOS)...');
-      // These calls are now implicitly guarded by the !kIsWeb check above
-      FlutterPcmSound.setFeedCallback(_onFeed);
-      await FlutterPcmSound.setup(sampleRate: 24000, channelCount: 1);
-      _isPcmPlayerSetup = true;
-      log('PCM sound player initialized successfully (24000Hz)');
-    } catch (e) {
-      log('PCM Sound setup error: $e');
-      _isPcmPlayerSetup = false; // Ensure setup status is correct on error
-    }
-  }
-  // Callback for flutter_pcm_sound (Android/iOS)
-  void _onFeed(int remainingFrames) {
-    // Add a top-level check for safety, although it should only be called when !kIsWeb
-    if (kIsWeb) return;
-
-    // Determine feed size (adjust buffer size as needed, e.g., 4096 or 8192 bytes = 2048 or 4096 frames)
-    const int feedSizeBytes = 8000; // 4000 frames (int16) = 8000 bytes
-    int feedSizeSamples = feedSizeBytes ~/ 2; // Samples (frames)
-
-    if (_playbackPcmData.isNotEmpty) {
-      final int bytesToFeed =
-          _playbackPcmData.length > feedSizeBytes
-              ? feedSizeBytes
-              : _playbackPcmData.length;
-      // Ensure bytesToFeed is an even number for Int16 conversion
-      final int actualBytesToFeed =
-          (bytesToFeed % 2 == 0) ? bytesToFeed : bytesToFeed - 1;
-
-      if (actualBytesToFeed <= 0) {
-        log('Feed size became zero or negative, feeding silence.');
+      // Stop previous sound/dispose source (remains the same)
+      if (_currentSoundHandle != null) {
         try {
-          // Guard PcmArrayInt16 usage
-          FlutterPcmSound.feed(
-            PcmArrayInt16.fromList(List.filled(feedSizeSamples, 0)),
-          );
+          await SoLoud.instance.stop(_currentSoundHandle!);
+          _currentSoundHandle = null;
         } catch (e) {
-          log('Error feeding silence (zero/neg size): $e');
+          log('Error stopping previous sound: $e');
         }
-        if (_playbackPcmData.isNotEmpty) {
-          _playbackPcmData.clear(); // Clear remaining odd byte if any
+      }
+      if (currentSound != null) {
+        try {
+          await SoLoud.instance.disposeSource(currentSound!);
+          currentSound = null;
+        } catch (e) {
+          log('Error disposing previous source: $e');
         }
-        if (mounted) {
-          setState(
-            () => isAiSpeaking = false,
-          ); // Buffer empty, stop speaking indicator
-        }
-        return;
       }
 
-      // Extract the exact number of bytes to feed
-      final frameBytes = _playbackPcmData.sublist(0, actualBytesToFeed);
+      // --- Create WAV data properly ---
+      const int sampleRate = 24000;
+      const int numChannels = 1;
+      const int bitsPerSample = 16;
+
+      final headerBytes = _generateWavHeader(
+        pcmData.length,
+        sampleRate,
+        numChannels,
+        bitsPerSample,
+      );
+
+      // Use Uint8List for combined data
+      final Uint8List combinedWavData = Uint8List(
+        headerBytes.length + pcmData.length,
+      );
+      combinedWavData.setRange(0, headerBytes.length, headerBytes);
+      combinedWavData.setRange(
+        headerBytes.length,
+        combinedWavData.length,
+        pcmData,
+      );
+
+      // Use loadMem for ALL platforms
       try {
-        // Guard PcmArrayInt16 usage
-        FlutterPcmSound.feed(
-          PcmArrayInt16(
-            bytes: ByteData.view(Uint8List.fromList(frameBytes).buffer),
-          ),
-        );
-        _playbackPcmData.removeRange(0, actualBytesToFeed);
         log(
-          'Fed $actualBytesToFeed bytes, remaining: ${_playbackPcmData.length}',
+          'Loading WAV data into SoLoud (${combinedWavData.length} bytes) for ${kIsWeb ? "Web" : "Native"}...',
         );
-      } catch (e) {
-        log('Error feeding PCM frame: $e');
-        // Consider clearing buffer or stopping on error?
-        _playbackPcmData.clear(); // Clear buffer on feed error
-        if (mounted) {
-          setState(() => isAiSpeaking = false);
+        // Use loadMem for all platforms
+        currentSound = await SoLoud.instance.loadMem(
+          // Use a unique identifier or just a generic name if needed
+          'memory_audio_${DateTime.now().millisecondsSinceEpoch}.wav',
+          combinedWavData,
+        );
+
+        if (currentSound == null) {
+          log('Error: Failed to load audio data from memory.');
+          if (mounted) setState(() => isAiSpeaking = false);
+          return;
         }
+
+        // Play the sound
+        _currentSoundHandle = await SoLoud.instance.play(currentSound!);
+        log('Playing sound with handle: $_currentSoundHandle');
+      } catch (e, s) {
+        // Log error for both web and native if loadMem fails
+        log('Error playing audio from memory: $e\n$s', error: e, stackTrace: s);
+        if (mounted) setState(() => isAiSpeaking = false);
+        // You could potentially add the file fallback here *only* for non-web if needed
+        // if (!kIsWeb) { /* ... file fallback code ... */ }
       }
-    } else {
-      // Buffer is empty, feed silence
-      try {
-        // Guard PcmArrayInt16 usage
-        FlutterPcmSound.feed(
-          PcmArrayInt16.fromList(List.filled(feedSizeSamples, 0)),
-        );
-        log('Fed silence (buffer empty)');
-        // If the buffer is empty, the AI is no longer speaking
-        if (isAiSpeaking && mounted) {
-          setState(() => isAiSpeaking = false);
-        }
-      } catch (e) {
-        log('Error feeding silence (buffer empty): $e');
+    } catch (e, s) {
+      log(
+        'General error in _playAudioWithSoloud: $e\n$s',
+        error: e,
+        stackTrace: s,
+      );
+      if (mounted) {
+        setState(() {
+          isAiSpeaking = false;
+          _currentSoundHandle = null;
+        });
       }
     }
   }
-}
 
+  // Utility to generate a simple WAV header for raw PCM data
+  List<int> _generateWavHeader(
+    int pcmDataLength,
+    int sampleRate,
+    int numChannels,
+    int bitsPerSample,
+  ) {
+    final byteRate = sampleRate * numChannels * (bitsPerSample ~/ 8);
+    final blockAlign = numChannels * (bitsPerSample ~/ 8);
+    final dataSize = pcmDataLength;
+    final chunkSize =
+        36 + dataSize; // 36 bytes for header fields excluding RIFF id and size
 
+    final header = ByteData(44); // Standard WAV header size
+
+    // RIFF chunk descriptor
+    header.setUint8(0, 0x52); // 'R'
+    header.setUint8(1, 0x49); // 'I'
+    header.setUint8(2, 0x46); // 'F'
+    header.setUint8(3, 0x46); // 'F'
+    header.setUint32(4, chunkSize, Endian.little);
+    header.setUint8(8, 0x57); // 'W'
+    header.setUint8(9, 0x41); // 'A'
+    header.setUint8(10, 0x56); // 'V'
+    header.setUint8(11, 0x45); // 'E'
+
+    // fmt sub-chunk
+    header.setUint8(12, 0x66); // 'f'
+    header.setUint8(13, 0x6D); // 'm'
+    header.setUint8(14, 0x74); // 't'
+    header.setUint8(15, 0x20); // ' '
+    header.setUint32(16, 16, Endian.little); // Subchunk1Size for PCM
+    header.setUint16(20, 1, Endian.little); // AudioFormat = 1 (PCM)
+    header.setUint16(22, numChannels, Endian.little);
+    header.setUint32(24, sampleRate, Endian.little);
+    header.setUint32(28, byteRate, Endian.little);
+    header.setUint16(32, blockAlign, Endian.little);
+    header.setUint16(34, bitsPerSample, Endian.little);
+
+    // data sub-chunk
+    header.setUint8(36, 0x64); // 'd'
+    header.setUint8(37, 0x61); // 'a'
+    header.setUint8(38, 0x74); // 't'
+    header.setUint8(39, 0x61); // 'a'
+    header.setUint32(40, dataSize, Endian.little);
+
+    return header.buffer.asUint8List();
+  }
+} // End _HomePageState
