@@ -3,6 +3,7 @@ import json
 import os
 import websockets
 from google import genai
+from google.genai import types
 import base64
 import io
 from pydub import AudioSegment
@@ -21,7 +22,6 @@ if not api_key:
 os.environ['GOOGLE_API_KEY'] = api_key
 generative.configure(api_key=api_key)
 MODEL = "gemini-2.0-flash-exp"   # Latest stable Flash model for general use
-TRANSCRIPTION_MODEL = "gemini-1.5-flash-8b"  # Same model for transcription
 
 client = genai.Client(
   http_options={
@@ -40,43 +40,75 @@ async def gemini_session_handler(client_websocket: websockets.WebSocketServerPro
         if "system_instruction" not in config:
             config["system_instruction"] = {
                 "parts": [{
-                    "text": """You are NativeFlow, a friendly and helpful multilingual language assistant, live translator, and tutor. Listen carefully to the user's request spoken in their language.
+                    "text": """You are NativeFlow, a native multilingual speaker and expert language tutor. You can speak multiple languages with perfect native accents and pronunciation.
 
-1.  **Identify User's Goal:** Determine if the user wants to:
-    * Translate a phrase from their language *into* another language (e.g., "How do I say 'thank you' in Vietnamese?").
-    * Understand the meaning of a phrase spoken in a foreign language *in English* (e.g., User speaks Vietnamese: "Cảm ơn nghĩa là gì?").
-    * Get help with pronunciation (e.g., "Can you say that again slowly?").
+**CRITICAL: NATIVE PRONUNCIATION RULE**
+When you speak words in a target language, you MUST:
+- Actually switch your speech accent to that language's native accent
+- Use the proper phonetics, tones, and rhythm of that language
+- NOT speak foreign words with an English accent
+- Sound like a native speaker of that language
+- Change your voice modulation, stress patterns, and phoneme production
 
-2.  **Translation (User Language -> Target Language):**
-    * Identify the user's original language and the target language.
-    * Identify the phrase to translate.
-    * Respond naturally *in the user's original language* for conversational text.
-    * Provide the translation *text* accurately in the target language.
-    * **IMPORTANT AUDIO:** Generate the spoken translation audio **using a clear, native-sounding accent for the *target language*** (e.g., use a Vietnamese accent for Vietnamese audio, a Mandarin Chinese accent for Mandarin audio, etc.). Avoid using a generic or American English accent for non-English translations.
-    * Offer brief context or pronunciation guidance if helpful.
+**LANGUAGE DETECTION & MEMORY:**
+- Detect the user's primary language from their speech
+- Remember this as their "home language" throughout the session
+- Always explain and converse in their home language
 
-3.  **Translation (Foreign Language -> English):**
-    * Identify the foreign language phrase spoken by the user.
-    * Recognize the request is for the English meaning.
-    * Respond *in English*, providing the clear English translation (text and audio). The audio for the *English* translation can use a standard English accent.
+**TRANSLATION FLOW:**
+When users ask for translations (e.g., "How do I say 'I am tall' in Vietnamese?"):
 
-4.  **Pronunciation Assistance:**
-    * If the user asks you to repeat a translation slowly (e.g., "Say that again slowly," "Can you repeat that?", "Slow down"), repeat *only* the translated phrase from the previous turn.
-    * Speak the repeated phrase clearly and at a noticeably slower pace, enunciating carefully **using the same native-sounding accent of the target language** as the original translation. Avoid adding extra conversational text during the slow repetition.
+1. **Acknowledge in their home language**: "Sure! To say 'I am tall' in Vietnamese is:"
 
-Your primary goal is to be a seamless live translation and language learning assistant, responding accurately and helpfully with clear text and **appropriately accented, natural-sounding spoken audio** (including slowed-down audio for pronunciation)."""
+2. **Speak the translation with NATIVE ACCENT**: 
+   - Switch your voice to Vietnamese native pronunciation
+   - Say "Tôi cao" with proper Vietnamese tones and accent
+   - Do NOT say it with English pronunciation
+
+3. **Provide slow pronunciation guidance**:
+   - "Let me say that slowly:"
+   - Speak "Tôi... cao" slowly but still with Vietnamese accent
+   - Break down syllables while maintaining native pronunciation
+
+**ACCENT SWITCHING EXAMPLES:**
+- **Vietnamese**: Use Vietnamese tones - "Tôi cao" (NOT "toy cow")
+- **Spanish**: Use Spanish R's - "Soy alto" (NOT English pronunciation)  
+- **Hindi**: Use Hindi sounds - "मैं लंबा हूँ" with proper Hindi accent
+- **French**: Use French nasal sounds - "Je suis grand" with French accent
+- **Mandarin**: Use proper Mandarin tones - "我很高" with Chinese pronunciation
+
+**SPEECH SYNTHESIS INSTRUCTIONS:**
+- When switching languages, completely change your pronunciation engine
+- Vietnamese: Use falling and rising tones, proper Vietnamese vowel sounds
+- Spanish: Roll R's, use proper Spanish vowel system, stress patterns
+- Hindi: Use retroflex consonants, proper aspiration, Hindi rhythm
+- French: Use nasal vowels, liaison, French R sound
+- The user should clearly hear the difference between languages
+
+**IMPORTANT SPEECH RULES:**
+- When speaking foreign languages, your voice should sound like a native speaker
+- Use proper rhythm, stress patterns, and phonemes of that language
+- The user should hear authentic pronunciation, not English-accented foreign words
+- Make clear language switches in your speech output
+- Speak foreign words as if you grew up speaking that language
+
+**EXAMPLE:**
+User: "How do I say 'hello' in Spanish?"
+You: "To say 'hello' in Spanish is: ¡Hola! [spoken with authentic Spanish accent] Let me say that slowly: Ho-la [slowly with Spanish accent, not English]"
+
+Your speech synthesis must actually change accents and pronunciation patterns when switching between languages. The user should hear genuine multilingual pronunciation."""
                 }]
             }
-        # Note: The config["generation_config"]["language"] = "en" line below this
-        # usually sets the *initial* language Gemini might expect or default to,
-        # but the system instruction above should override the rigid swapping behavior.
 
-        # Add language preference to the configuration
+        # Set response modalities at the top level (not in generation_config)
+        config["response_modalities"] = ["AUDIO"]
+        
+        # Add generation config without response_modalities
         if "generation_config" not in config:
-            config["generation_config"]= {}
+            config["generation_config"] = {}
 
-        # Set English as the default language
-        config["generation_config"]["language"] = "en"
+        # Remove language setting as it's not supported in the new API
+        # config["generation_config"]["language"] = "en"
 
         async with client.aio.live.connect(model=MODEL, config=config) as session:
             print("Connected to Gemini API")
@@ -91,10 +123,20 @@ Your primary goal is to be a seamless live translation and language learning ass
                               for chunk in data["realtime_input"]["media_chunks"]:
                                   if chunk["mime_type"] == "audio/pcm":
                                       save_pcm_as_mp3(base64.b64decode(chunk["data"]),16000, filename="user_input_to_server.mp3")
-                                      await session.send({"mime_type": "audio/pcm", "data": chunk["data"]})
+                                      # Use send_realtime_input for audio data
+                                      audio_blob = types.Blob(
+                                          data=base64.b64decode(chunk["data"]),
+                                          mime_type="audio/pcm;rate=16000"
+                                      )
+                                      await session.send_realtime_input(audio=audio_blob)
 
                                   elif chunk["mime_type"] == "image/jpeg":
-                                      await session.send({"mime_type": "image/jpeg", "data": chunk["data"]})
+                                      # Use send_realtime_input for image data
+                                      image_blob = types.Blob(
+                                          data=base64.b64decode(chunk["data"]),
+                                          mime_type="image/jpeg"
+                                      )
+                                      await session.send_realtime_input(media_chunks=[image_blob])
 
                       except Exception as e:
                           print(f"Error sending to Gemini: {e}")
@@ -205,12 +247,12 @@ Your primary goal is to be a seamless live translation and language learning ass
         print("Gemini session closed.")
 
 def transcribe_audio(audio_data, sample_rate=24000):
-    """Transcribes audio using Gemini 1.5 Flash."""
+    """Transcribes audio using Gemini 2.0 Flash."""
     try:
         # Make sure we have valid audio data
         if not audio_data:
             print("No audio data received for transcription")
-            return None # Return None instead of string message
+            return None
             
         # Convert PCM to MP3
         save_pcm_as_mp3(audio_data, sample_rate=sample_rate, filename="gemini_output_for_transcription.mp3")
@@ -219,21 +261,29 @@ def transcribe_audio(audio_data, sample_rate=24000):
             print("Failed to convert PCM to MP3")
             return None
             
-        # Create a client specific for transcription
-        transcription_client = generative.GenerativeModel(model_name=TRANSCRIPTION_MODEL)
-        
-        prompt = """Generate a transcript of the speech. 
-        Please do not include any other text in the response. 
-        If you cannot hear the speech, please only say '<Not recognizable>'."""
-        
+        # Use the new Gemini API client for transcription
         try:
-            response = transcription_client.generate_content(
-                [
-                    prompt,
-                    {
-                        "mime_type": "audio/mp3", 
-                        "data": base64.b64decode(mp3_audio_base64),
-                    }
+            # Create audio blob for transcription
+            audio_blob = types.Blob(
+                data=base64.b64decode(mp3_audio_base64),
+                mime_type="audio/mp3"
+            )
+            
+            prompt = """Generate a transcript of the speech. 
+            Please do not include any other text in the response. 
+            If you cannot hear the speech, please only say '<Not recognizable>'."""
+            
+            # Use the client for transcription with the newer model
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(text=prompt),
+                            types.Part(inline_data=audio_blob)
+                        ]
+                    )
                 ]
             )
             

@@ -184,8 +184,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       () {},
     ); // Initialize dummy timer
 
-    // Initialize SoLoud for all platforms
-    _initSoLoud();
+    // Set initial state - no automatic audio initialization
+    setState(() {
+      isConnecting = false;
+      connectionStatus = 'Ready to start';
+    });
   }
 
   Future<void> _initSoLoud() async {
@@ -352,7 +355,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ? 'Gemini is speaking...'
                 : isRecording
                 ? 'Listening...'
-                : 'Press microphone to start speaking');
+                : 'Press microphone to initialize audio and start speaking');
 
     final textColor =
         isAiSpeaking
@@ -409,29 +412,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    // Ensure SoLoud is initialized before building the main UI
-    if (!SoLoud.instance.isInitialized && isConnecting) {
-      return Scaffold(
-        backgroundColor: NativeFlowTheme.backgroundGrey,
-        appBar: AppBar(
-          title: _buildLogo(),
-          elevation: 0,
-          backgroundColor: Colors.white,
-          centerTitle: true,
-        ),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 20),
-              Text(connectionStatus, style: const TextStyle(fontSize: 18)),
-            ],
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
       backgroundColor: NativeFlowTheme.backgroundGrey,
       appBar: AppBar(
@@ -452,9 +432,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Show progress indicator only if connecting state is explicitly true
-              // (and not just because SoLoud is initializing)
-              if (isConnecting && SoLoud.instance.isInitialized)
+              // Show progress indicator when connecting (after SoLoud init)
+              if (isConnecting)
                 FadeTransition(
                   opacity: _progressFadeAnimation,
                   child: const CircularProgressIndicator(),
@@ -645,6 +624,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return;
     }
 
+    // First, ensure SoLoud is initialized
+    if (!SoLoud.instance.isInitialized) {
+      await _initSoLoud();
+      // If initialization failed, don't proceed
+      if (!SoLoud.instance.isInitialized) {
+        return;
+      }
+    }
+
     // --- Permission Check ---
     bool hasPermission = await record.hasPermission();
     if (!hasPermission) {
@@ -664,9 +652,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       channel.sink.add(
         jsonEncode({
-          "setup": {
-            "generation_config": {"language": "en"},
-          },
+          "setup": {"generation_config": {}},
         }),
       );
       log('Config sent');
